@@ -355,6 +355,9 @@ func validateCartSnapshot(snapshot CartSnapshot) (int64, error) {
 	if snapshot.Items == nil {
 		return 0, fmt.Errorf("cart snapshot items list is required")
 	}
+	if len(snapshot.Items) == 0 {
+		return 0, fmt.Errorf("cart snapshot must contain at least one item")
+	}
 	if snapshot.ShippingPaise < 0 || snapshot.DiscountPaise < 0 {
 		return 0, fmt.Errorf("cart shipping and discount amounts must be non-negative")
 	}
@@ -421,6 +424,9 @@ func validateInput(input Input) error {
 		if err := requireText("requirement", requirement.Attribute, "attribute"); err != nil {
 			return err
 		}
+		if err := validateBuiltInRequirement(requirement); err != nil {
+			return err
+		}
 		if requirement.Severity != Hard && requirement.Severity != Preference {
 			return fmt.Errorf("requirement %q has invalid severity %q", requirement.ID, requirement.Severity)
 		}
@@ -465,7 +471,7 @@ func validateInput(input Input) error {
 		} else if item.ProductID != "" || item.VariantID != "" {
 			return fmt.Errorf("cart-scoped evidence %q must not specify product_id or variant_id", item.ID)
 		}
-		if item.Scope == CartScope && (item.Attribute == "total_price_paise" || item.Attribute == "delivery_date") {
+		if item.Attribute == "total_price_paise" || item.Attribute == "delivery_date" {
 			return fmt.Errorf("evidence %q cannot override cart snapshot attribute %q", item.ID, item.Attribute)
 		}
 		if err := validateValue(fmt.Sprintf("evidence %q value", item.ID), item.Value); err != nil {
@@ -485,6 +491,38 @@ func validateInput(input Input) error {
 				return typeMismatchError(requirement, item)
 			}
 		}
+	}
+	return nil
+}
+
+// validateBuiltInRequirement defines the type and operator contracts for
+// attributes derived directly from the cart snapshot. It runs before generic
+// scope/operator validation so malformed requirements fail before comparison.
+func validateBuiltInRequirement(requirement Requirement) error {
+	var wantType ValueType
+	var allowedOperators map[Operator]bool
+	switch requirement.Attribute {
+	case "total_price_paise":
+		wantType = NumberType
+		allowedOperators = map[Operator]bool{
+			Equals: true, NotEquals: true, LessThanOrEqual: true, GreaterThanOrEqual: true,
+		}
+	case "delivery_date":
+		wantType = DateType
+		allowedOperators = map[Operator]bool{
+			Equals: true, NotEquals: true, BeforeOrEqual: true, AfterOrEqual: true,
+		}
+	default:
+		return nil
+	}
+	if requirement.Scope != CartScope {
+		return fmt.Errorf("requirement %q: built-in cart attribute %q must use cart scope", requirement.ID, requirement.Attribute)
+	}
+	if requirement.Expected.Type != wantType {
+		return fmt.Errorf("requirement %q: built-in cart attribute %q requires expected type %q, got %q", requirement.ID, requirement.Attribute, wantType, requirement.Expected.Type)
+	}
+	if !allowedOperators[requirement.Operator] {
+		return fmt.Errorf("requirement %q: operator %q is unsupported for built-in cart attribute %q", requirement.ID, requirement.Operator, requirement.Attribute)
 	}
 	return nil
 }

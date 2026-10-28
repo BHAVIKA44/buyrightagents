@@ -24,6 +24,8 @@ Hash a fixed struct representation of the full INR snapshot with item rows sorte
 
 Requirements and evidence use explicit cart or item scope and subject IDs. Item evidence must match the cart item's product and variant. Cart total and promised delivery are derived from the snapshot, not caller evidence.
 
+The built-in `total_price_paise` requirement is cart-scoped with numeric expected values and numeric/equality operators. The built-in `delivery_date` requirement is cart-scoped with validated ISO date values and date/equality operators. Empty snapshots are rejected so a purchase report cannot return `ALLOW` for an empty cart.
+
 ## Keep local evaluation separate from checkout
 
 `ALLOW` reports only the result of this local evaluation. A snapshot hash binds the report to the caller-supplied data, but does not prove the live merchant cart matches it or authenticate seller claims. The current verifier does not execute checkout or payments.

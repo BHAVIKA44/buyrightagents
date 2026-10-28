@@ -402,6 +402,74 @@ func TestMissingDeliveryPromiseIsUnknown(t *testing.T) {
 	}
 }
 
+func TestBuiltInCartRequirementContracts(t *testing.T) {
+	snapshot := testSnapshot()
+	tests := []struct {
+		name        string
+		attribute   string
+		expected    Value
+		scope       Scope
+		operator    Operator
+		wantMessage string
+	}{
+		{"total as string", "total_price_paise", StringValue("475000"), CartScope, Equals, "requires expected type \"number\""},
+		{"total as boolean", "total_price_paise", BooleanValue(true), CartScope, Equals, "requires expected type \"number\""},
+		{"total as date", "total_price_paise", DateValue("2026-10-30"), CartScope, Equals, "requires expected type \"number\""},
+		{"delivery as number", "delivery_date", NumberInt64Value(20261030), CartScope, Equals, "requires expected type \"date\""},
+		{"delivery as boolean", "delivery_date", BooleanValue(true), CartScope, Equals, "requires expected type \"date\""},
+		{"delivery as string", "delivery_date", StringValue("2026-10-30"), CartScope, Equals, "requires expected type \"date\""},
+		{"total at item scope", "total_price_paise", NumberInt64Value(475000), ItemScope, Equals, "must use cart scope"},
+		{"delivery at item scope", "delivery_date", DateValue("2026-10-30"), ItemScope, Equals, "must use cart scope"},
+		{"total with date operator", "total_price_paise", NumberInt64Value(475000), CartScope, BeforeOrEqual, "unsupported for built-in cart attribute"},
+		{"delivery with numeric operator", "delivery_date", DateValue("2026-10-30"), CartScope, LessThanOrEqual, "unsupported for built-in cart attribute"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			subjectID := snapshot.CartID
+			if tt.scope == ItemScope {
+				subjectID = snapshot.Items[0].ItemID
+			}
+			requirement := Requirement{
+				ID: "built-in", Attribute: tt.attribute, Scope: tt.scope, SubjectID: subjectID,
+				Operator: tt.operator, Expected: tt.expected, Severity: Hard,
+			}
+			_, err := Evaluate(Input{CartSnapshot: snapshot, Requirements: []Requirement{requirement}})
+			if err == nil || !strings.Contains(err.Error(), tt.wantMessage) {
+				t.Fatalf("Evaluate error = %v, want substring %q", err, tt.wantMessage)
+			}
+		})
+	}
+}
+
+func TestEvaluateRejectsEmptyCart(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.Items = []CartItem{}
+	report, err := Evaluate(Input{CartSnapshot: snapshot, Requirements: []Requirement{
+		{ID: "total", Attribute: "total_price_paise", Scope: CartScope, SubjectID: snapshot.CartID, Operator: Equals, Expected: NumberInt64Value(0), Severity: Hard},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "at least one item") {
+		t.Fatalf("Evaluate error = %v, want empty-cart validation error", err)
+	}
+	if report.Decision == Allow {
+		t.Fatal("empty cart produced ALLOW")
+	}
+}
+
+func TestSampleCartTotalAndDecision(t *testing.T) {
+	snapshot := testSnapshot()
+	requirement := Requirement{
+		ID: "total", Attribute: "total_price_paise", Scope: CartScope, SubjectID: snapshot.CartID,
+		Operator: LessThanOrEqual, Expected: NumberInt64Value(500000), Severity: Hard,
+	}
+	report, err := Evaluate(Input{CartSnapshot: snapshot, Requirements: []Requirement{requirement}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != Allow || report.Evidence[0].Value.Value != json.Number("475000") {
+		t.Fatalf("sample cart verification = decision %s, total %#v; want ALLOW and 475000 paise", report.Decision, report.Evidence[0].Value.Value)
+	}
+}
+
 func TestEvaluateRejectsInvalidInput(t *testing.T) {
 	valid := Input{
 		CartSnapshot: testSnapshot(),

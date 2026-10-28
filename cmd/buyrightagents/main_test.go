@@ -32,7 +32,7 @@ func TestRunVerify(t *testing.T) {
 	if code := run([]string{"verify", inputPath}, &stdout, &stderr); code != 0 {
 		t.Fatalf("run verify code = %d, stderr %q", code, stderr.String())
 	}
-	if !strings.Contains(stdout.String(), `"decision": "ALLOW"`) || !strings.Contains(stdout.String(), `"cart_snapshot_sha256":`) || !strings.Contains(stdout.String(), `"source_id": "fictional-catalogue:backpack-001"`) || !strings.Contains(stdout.String(), `"source_id": "local-cart-snapshot"`) {
+	if !strings.Contains(stdout.String(), `"decision": "ALLOW"`) || !strings.Contains(stdout.String(), `"cart_snapshot_sha256":`) || !strings.Contains(stdout.String(), `"value": 475000`) || !strings.Contains(stdout.String(), `"source_id": "fictional-catalogue:backpack-001"`) || !strings.Contains(stdout.String(), `"source_id": "local-cart-snapshot"`) {
 		t.Fatalf("verify output missing decision or evidence provenance: %s", stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -74,6 +74,10 @@ func TestRunVerifyErrors(t *testing.T) {
 	if err := os.WriteFile(missingItemPricePath, []byte(`{"cart_snapshot":{"cart_id":"cart-1","currency":"INR","captured_at":"2026-10-28T10:00:00Z","items":[{"item_id":"item-1","product_id":"product-1","variant_id":"variant-1","quantity":1}],"shipping_paise":0,"discount_paise":0},"requirements":[],"evidence":[]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	emptyCartPath := filepath.Join(t.TempDir(), "empty-cart.json")
+	if err := os.WriteFile(emptyCartPath, []byte(`{"cart_snapshot":{"cart_id":"cart-1","currency":"INR","captured_at":"2026-10-28T10:00:00Z","items":[],"shipping_paise":0,"discount_paise":0},"requirements":[],"evidence":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -89,6 +93,7 @@ func TestRunVerifyErrors(t *testing.T) {
 		{"duplicate deeply nested JSON key", []string{"verify", duplicateDeepPath}, "duplicate JSON object key"},
 		{"missing required shipping field", []string{"verify", missingShippingPath}, "shipping_paise is required"},
 		{"missing required item price", []string{"verify", missingItemPricePath}, "unit_price_paise is required"},
+		{"empty cart", []string{"verify", emptyCartPath}, "at least one item"},
 		{"missing file argument", []string{"verify"}, "usage: buyrightagents verify"},
 		{"extra file argument", []string{"verify", malformedPath, "extra"}, "usage: buyrightagents verify"},
 		{"unknown command", []string{"purchase"}, "unknown command"},
