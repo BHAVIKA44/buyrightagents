@@ -1,8 +1,27 @@
 {
+  "cart_snapshot": {
+    "cart_id": "cart-001",
+    "currency": "INR",
+    "captured_at": "2026-10-28T10:05:00Z",
+    "items": [
+      {
+        "item_id": "backpack-001",
+        "product_id": "fictional-product-001",
+        "variant_id": "fictional-variant-black",
+        "quantity": 1,
+        "unit_price_paise": 450000
+      }
+    ],
+    "shipping_paise": 25000,
+    "discount_paise": 0,
+    "delivery_date": "2026-10-29"
+  },
   "requirements": [
     {
       "id": "vegan-material",
       "attribute": "vegan",
+      "scope": "item",
+      "subject_id": "backpack-001",
       "operator": "equals",
       "expected": {"type": "boolean", "value": true},
       "severity": "hard"
@@ -10,6 +29,8 @@
     {
       "id": "laptop-fit",
       "attribute": "laptop_fit_inches",
+      "scope": "item",
+      "subject_id": "backpack-001",
       "operator": "greater_than_or_equal",
       "expected": {"type": "number", "value": 16},
       "severity": "hard"
@@ -17,6 +38,8 @@
     {
       "id": "total-price",
       "attribute": "total_price_paise",
+      "scope": "cart",
+      "subject_id": "cart-001",
       "operator": "less_than_or_equal",
       "expected": {"type": "number", "value": 500000},
       "severity": "hard"
@@ -24,6 +47,8 @@
     {
       "id": "delivery-deadline",
       "attribute": "delivery_date",
+      "scope": "cart",
+      "subject_id": "cart-001",
       "operator": "before_or_equal",
       "expected": {"type": "date", "value": "2026-10-30"},
       "severity": "hard"
@@ -33,6 +58,10 @@
     {
       "id": "catalogue-vegan-claim",
       "attribute": "vegan",
+      "scope": "item",
+      "subject_id": "backpack-001",
+      "product_id": "fictional-product-001",
+      "variant_id": "fictional-variant-black",
       "value": {"type": "boolean", "value": true},
       "source_id": "fictional-catalogue:backpack-001",
       "observed_at": "2026-10-28T10:00:00Z"
@@ -40,23 +69,13 @@
     {
       "id": "catalogue-laptop-fit",
       "attribute": "laptop_fit_inches",
+      "scope": "item",
+      "subject_id": "backpack-001",
+      "product_id": "fictional-product-001",
+      "variant_id": "fictional-variant-black",
       "value": {"type": "number", "value": 16},
       "source_id": "fictional-catalogue:backpack-001",
       "observed_at": "2026-10-28T10:00:00Z"
-    },
-    {
-      "id": "fictional-cart-total",
-      "attribute": "total_price_paise",
-      "value": {"type": "number", "value": 475000},
-      "source_id": "fictional-cart:cart-001",
-      "observed_at": "2026-10-28T10:05:00Z"
-    },
-    {
-      "id": "fictional-delivery-estimate",
-      "attribute": "delivery_date",
-      "value": {"type": "date", "value": "2026-10-29"},
-      "source_id": "fictional-cart:cart-001",
-      "observed_at": "2026-10-28T10:05:00Z"
     }
   ]
 }

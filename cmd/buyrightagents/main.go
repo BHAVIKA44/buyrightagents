@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -74,11 +75,19 @@ func verifyFile(path string, stdout, stderr io.Writer) int {
 }
 
 func decodeInput(reader io.Reader) (verification.Input, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return verification.Input{}, err
+	}
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return verification.Input{}, err
+	}
 	var file struct {
+		CartSnapshot verification.CartSnapshot   `json:"cart_snapshot"`
 		Requirements *[]verification.Requirement `json:"requirements"`
 		Evidence     *[]verification.Evidence    `json:"evidence"`
 	}
-	decoder := json.NewDecoder(reader)
+	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
 	if err := decoder.Decode(&file); err != nil {
@@ -91,13 +100,85 @@ func decodeInput(reader io.Reader) (verification.Input, error) {
 		return verification.Input{}, errors.New("evidence array is required")
 	}
 	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return verification.Input{}, errors.New("input must contain exactly one JSON value")
-		}
+	if err := decoder.Decode(&trailing); err == nil {
+		return verification.Input{}, errors.New("input must contain exactly one JSON value")
+	} else if !errors.Is(err, io.EOF) {
 		return verification.Input{}, err
 	}
-	return verification.Input{Requirements: *file.Requirements, Evidence: *file.Evidence}, nil
+	return verification.Input{
+		CartSnapshot: file.CartSnapshot,
+		Requirements: *file.Requirements,
+		Evidence:     *file.Evidence,
+	}, nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.UseNumber()
+	if err := scanJSONValue(decoder); err != nil {
+		return err
+	}
+	if _, err := decoder.Token(); err == nil {
+		return fmt.Errorf("input must contain exactly one JSON value")
+	} else if !errors.Is(err, io.EOF) {
+		return err
+	}
+	return nil
+}
+
+func scanJSONValue(decoder *json.Decoder) error {
+	token, err := decoder.Token()
+	if err != nil {
+		return err
+	}
+	delimiter, isDelimiter := token.(json.Delim)
+	if !isDelimiter {
+		return nil
+	}
+	switch delimiter {
+	case '{':
+		keys := make(map[string]struct{})
+		for decoder.More() {
+			keyToken, err := decoder.Token()
+			if err != nil {
+				return err
+			}
+			key, ok := keyToken.(string)
+			if !ok {
+				return fmt.Errorf("JSON object key is not a string")
+			}
+			if _, exists := keys[key]; exists {
+				return fmt.Errorf("duplicate JSON object key %q", key)
+			}
+			keys[key] = struct{}{}
+			if err := scanJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim('}') {
+			return fmt.Errorf("malformed JSON object")
+		}
+	case '[':
+		for decoder.More() {
+			if err := scanJSONValue(decoder); err != nil {
+				return err
+			}
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		if closing != json.Delim(']') {
+			return fmt.Errorf("malformed JSON array")
+		}
+	default:
+		return fmt.Errorf("unexpected JSON delimiter %q", delimiter)
+	}
+	return nil
 }
 
 func printHelp(writer io.Writer) {

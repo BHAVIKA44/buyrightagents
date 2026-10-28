@@ -2,6 +2,7 @@ package verification
 
 import (
 	"encoding/json"
+	"math"
 	"strings"
 	"testing"
 )
@@ -86,7 +87,7 @@ func TestDateComparisons(t *testing.T) {
 
 func TestMissingAndContradictoryEvidence(t *testing.T) {
 	requirement := req("r1", Hard, "vegan", Equals, BooleanValue(true))
-	report, err := Evaluate(Input{Requirements: []Requirement{requirement}})
+	report, err := Evaluate(Input{CartSnapshot: testSnapshot(), Requirements: []Requirement{requirement}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,6 +96,7 @@ func TestMissingAndContradictoryEvidence(t *testing.T) {
 	}
 
 	input := Input{
+		CartSnapshot: testSnapshot(),
 		Requirements: []Requirement{requirement},
 		Evidence: []Evidence{
 			evidence("e1", "vegan", BooleanValue(true)),
@@ -153,7 +155,7 @@ func TestOverallDecisionPolicy(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			report, err := Evaluate(Input{Requirements: tt.requirements, Evidence: tt.evidence})
+			report, err := Evaluate(Input{CartSnapshot: testSnapshot(), Requirements: tt.requirements, Evidence: tt.evidence})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -167,6 +169,7 @@ func TestOverallDecisionPolicy(t *testing.T) {
 func TestAssessmentPreservesEvidenceProvenance(t *testing.T) {
 	item := evidence("evidence-1", "vegan", BooleanValue(true))
 	report, err := Evaluate(Input{
+		CartSnapshot: testSnapshot(),
 		Requirements: []Requirement{req("r1", Hard, "vegan", Equals, BooleanValue(true))},
 		Evidence:     []Evidence{item},
 	})
@@ -183,8 +186,225 @@ func TestAssessmentPreservesEvidenceProvenance(t *testing.T) {
 	}
 }
 
+func TestCartSnapshotHashIsStableAndNormalizesItemOrder(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.Items = append(snapshot.Items, CartItem{
+		ItemID: "item-2", ProductID: "product-2", VariantID: "variant-2", Quantity: 2, UnitPricePaise: 100,
+	})
+	reordered := snapshot
+	reordered.Items = []CartItem{snapshot.Items[1], snapshot.Items[0]}
+
+	first := snapshotHashForTest(t, snapshot)
+	second := snapshotHashForTest(t, snapshot)
+	third := snapshotHashForTest(t, reordered)
+	if first != second || first != third {
+		t.Fatalf("hashes differ for identical or reordered snapshots: %s %s %s", first, second, third)
+	}
+	if len(first) != 64 {
+		t.Fatalf("SHA-256 hex length = %d, want 64", len(first))
+	}
+}
+
+func TestCartSnapshotHashChangesWithPurchaseFields(t *testing.T) {
+	base := testSnapshot()
+	baseHash := snapshotHashForTest(t, base)
+	tests := []struct {
+		name   string
+		mutate func(*CartSnapshot)
+	}{
+		{"cart identity", func(s *CartSnapshot) { s.CartID = "cart-2" }},
+		{"capture timestamp", func(s *CartSnapshot) { s.CapturedAt = "2026-10-28T10:01:00Z" }},
+		{"item identity", func(s *CartSnapshot) { s.Items[0].ItemID = "item-2" }},
+		{"product", func(s *CartSnapshot) { s.Items[0].ProductID = "product-2" }},
+		{"variant", func(s *CartSnapshot) { s.Items[0].VariantID = "variant-2" }},
+		{"quantity", func(s *CartSnapshot) { s.Items[0].Quantity = 2 }},
+		{"unit price", func(s *CartSnapshot) { s.Items[0].UnitPricePaise++ }},
+		{"shipping", func(s *CartSnapshot) { s.ShippingPaise++ }},
+		{"discount", func(s *CartSnapshot) { s.DiscountPaise = 1 }},
+		{"delivery promise", func(s *CartSnapshot) { s.DeliveryDate = datePointer("2026-10-30") }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			changed := cloneSnapshot(base)
+			tt.mutate(&changed)
+			if got := snapshotHashForTest(t, changed); got == baseHash {
+				t.Fatalf("hash did not change: %s", got)
+			}
+		})
+	}
+	unsupportedCurrency := cloneSnapshot(base)
+	unsupportedCurrency.Currency = "USD"
+	baseCanonicalHash, err := hashSnapshot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupportedCurrencyHash, err := hashSnapshot(unsupportedCurrency)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if baseCanonicalHash == unsupportedCurrencyHash {
+		t.Fatal("hash did not include currency")
+	}
+	if _, err := Evaluate(Input{CartSnapshot: unsupportedCurrency}); err == nil || !strings.Contains(err.Error(), "only INR") {
+		t.Fatalf("unsupported currency error = %v", err)
+	}
+}
+
+func TestCartSnapshotValidation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*CartSnapshot)
+		want   string
+	}{
+		{"missing cart id", func(s *CartSnapshot) { s.CartID = "" }, "cart_id is required"},
+		{"missing item list", func(s *CartSnapshot) { s.Items = nil }, "items list is required"},
+		{"duplicate item id", func(s *CartSnapshot) { s.Items = append(s.Items, s.Items[0]) }, "duplicate cart item id"},
+		{"missing item id", func(s *CartSnapshot) { s.Items[0].ItemID = "" }, "item_id is required"},
+		{"missing product id", func(s *CartSnapshot) { s.Items[0].ProductID = "" }, "product_id is required"},
+		{"missing variant id", func(s *CartSnapshot) { s.Items[0].VariantID = "" }, "variant_id is required"},
+		{"zero quantity", func(s *CartSnapshot) { s.Items[0].Quantity = 0 }, "quantity must be positive"},
+		{"negative unit price", func(s *CartSnapshot) { s.Items[0].UnitPricePaise = -1 }, "unit_price_paise must be non-negative"},
+		{"negative shipping", func(s *CartSnapshot) { s.ShippingPaise = -1 }, "non-negative"},
+		{"negative discount", func(s *CartSnapshot) { s.DiscountPaise = -1 }, "non-negative"},
+		{"unsupported currency", func(s *CartSnapshot) { s.Currency = "USD" }, "only INR"},
+		{"invalid capture timestamp", func(s *CartSnapshot) { s.CapturedAt = "yesterday" }, "invalid captured_at"},
+		{"invalid delivery date", func(s *CartSnapshot) { s.DeliveryDate = datePointer("2026-02-30") }, "valid ISO calendar date"},
+		{"discount exceeds gross", func(s *CartSnapshot) { s.DiscountPaise = 475001 }, "discount exceeds"},
+		{"line total overflow", func(s *CartSnapshot) { s.Items[0].Quantity = 2; s.Items[0].UnitPricePaise = math.MaxInt64 }, "line total overflows"},
+		{"subtotal overflow", func(s *CartSnapshot) {
+			s.Items[0].UnitPricePaise = math.MaxInt64
+			s.Items = append(s.Items, CartItem{ItemID: "item-2", ProductID: "product-2", VariantID: "variant-2", Quantity: 1, UnitPricePaise: 1})
+		}, "subtotal overflows"},
+		{"shipping total overflow", func(s *CartSnapshot) { s.Items[0].UnitPricePaise = math.MaxInt64; s.ShippingPaise = 1 }, "overflows int64"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			snapshot := cloneSnapshot(testSnapshot())
+			tt.mutate(&snapshot)
+			_, err := Evaluate(Input{CartSnapshot: snapshot})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestEvidenceScopePreventsCrossItemMatching(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.Items = append(snapshot.Items, CartItem{ItemID: "item-2", ProductID: "product-2", VariantID: "variant-2", Quantity: 1, UnitPricePaise: 100})
+	requirement := req("r2-vegan", Hard, "vegan", Equals, BooleanValue(true))
+	requirement.SubjectID = "item-2"
+	report, err := Evaluate(Input{CartSnapshot: snapshot, Requirements: []Requirement{requirement}, Evidence: []Evidence{evidence("e1", "vegan", BooleanValue(true))}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Results[0].Outcome != Unknown || len(report.Results[0].Assessments) != 0 || report.Decision != Review {
+		t.Fatalf("other item's evidence satisfied requirement: %#v", report)
+	}
+}
+
+func TestScopeAndItemEvidenceValidation(t *testing.T) {
+	base := Input{CartSnapshot: testSnapshot(), Requirements: []Requirement{req("r1", Hard, "vegan", Equals, BooleanValue(true))}, Evidence: []Evidence{evidence("e1", "vegan", BooleanValue(true))}}
+	tests := []struct {
+		name   string
+		mutate func(*Input)
+		want   string
+	}{
+		{"invalid requirement scope", func(in *Input) { in.Requirements[0].Scope = "order" }, "unsupported scope"},
+		{"requirement wrong cart id", func(in *Input) { in.Requirements[0].Scope = CartScope; in.Requirements[0].SubjectID = "other-cart" }, "does not match cart_id"},
+		{"requirement missing item", func(in *Input) { in.Requirements[0].SubjectID = "missing-item" }, "does not reference a cart item"},
+		{"evidence missing item", func(in *Input) { in.Evidence[0].SubjectID = "missing-item" }, "does not reference a cart item"},
+		{"evidence wrong product", func(in *Input) { in.Evidence[0].ProductID = "wrong-product" }, "does not match cart item"},
+		{"evidence wrong variant", func(in *Input) { in.Evidence[0].VariantID = "wrong-variant" }, "does not match cart item"},
+		{"cart scope evidence wrong id", func(in *Input) {
+			in.Evidence[0].Scope = CartScope
+			in.Evidence[0].SubjectID = "other-cart"
+			in.Evidence[0].ProductID = ""
+			in.Evidence[0].VariantID = ""
+		}, "does not match cart_id"},
+		{"cart evidence cannot override total", func(in *Input) {
+			in.Evidence[0].Attribute = "total_price_paise"
+			in.Evidence[0].Scope = CartScope
+			in.Evidence[0].SubjectID = "cart-1"
+			in.Evidence[0].ProductID = ""
+			in.Evidence[0].VariantID = ""
+			in.Evidence[0].Value = NumberValue(1)
+		}, "cannot override cart snapshot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := cloneInput(base)
+			tt.mutate(&input)
+			_, err := Evaluate(input)
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %v, want substring %q", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestSnapshotDerivedTotalAndDelivery(t *testing.T) {
+	totalRequirement := Requirement{
+		ID: "total", Attribute: "total_price_paise", Scope: CartScope, SubjectID: "cart-1",
+		Operator: LessThanOrEqual, Expected: NumberInt64Value(475000), Severity: Hard,
+	}
+	report, err := Evaluate(Input{CartSnapshot: testSnapshot(), Requirements: []Requirement{totalRequirement}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != Allow || report.Results[0].Outcome != Pass || report.CartSnapshotSHA256 == "" {
+		t.Fatalf("exact cart total did not pass: %#v", report)
+	}
+	assessment := report.Results[0].Assessments[0]
+	if assessment.EvidenceID != "cart-snapshot:total-price-paise" || assessment.SourceID != "local-cart-snapshot" || assessment.ObservedAt != testSnapshot().CapturedAt || assessment.Value.Value != json.Number("475000") {
+		t.Fatalf("derived total provenance missing: %#v", assessment)
+	}
+	if len(report.Evidence) != 2 || report.Evidence[0].ID != assessment.EvidenceID || report.Evidence[1].ID != "cart-snapshot:delivery-date" {
+		t.Fatalf("derived evidence missing from report: %#v", report.Evidence)
+	}
+
+	overLimit := testSnapshot()
+	overLimit.ShippingPaise++
+	report, err = Evaluate(Input{CartSnapshot: overLimit, Requirements: []Requirement{totalRequirement}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != Block || report.Results[0].Outcome != Fail {
+		t.Fatalf("above-limit total was not blocked: %#v", report)
+	}
+
+	discounted := testSnapshot()
+	discounted.DiscountPaise = 50000
+	discountRequirement := totalRequirement
+	discountRequirement.Expected = NumberInt64Value(425000)
+	report, err = Evaluate(Input{CartSnapshot: discounted, Requirements: []Requirement{discountRequirement}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Decision != Allow || report.Evidence[0].Value.Value != json.Number("425000") {
+		t.Fatalf("discount was not included in derived total: %#v", report)
+	}
+}
+
+func TestMissingDeliveryPromiseIsUnknown(t *testing.T) {
+	snapshot := testSnapshot()
+	snapshot.DeliveryDate = nil
+	requirement := Requirement{
+		ID: "delivery", Attribute: "delivery_date", Scope: CartScope, SubjectID: snapshot.CartID,
+		Operator: BeforeOrEqual, Expected: DateValue("2026-10-30"), Severity: Hard,
+	}
+	report, err := Evaluate(Input{CartSnapshot: snapshot, Requirements: []Requirement{requirement}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Results[0].Outcome != Unknown || report.Decision != Review || len(report.Results[0].Assessments) != 0 {
+		t.Fatalf("missing delivery promise did not require review: %#v", report)
+	}
+}
+
 func TestEvaluateRejectsInvalidInput(t *testing.T) {
 	valid := Input{
+		CartSnapshot: testSnapshot(),
 		Requirements: []Requirement{req("r1", Hard, "price", LessThanOrEqual, NumberValue(500000))},
 		Evidence:     []Evidence{evidence("e1", "price", NumberValue(500000))},
 	}
@@ -226,6 +446,7 @@ func evaluateOne(t *testing.T, expected, actual Value, operator Operator) Report
 	t.Helper()
 	attribute := "value"
 	report, err := Evaluate(Input{
+		CartSnapshot: testSnapshot(),
 		Requirements: []Requirement{req("r1", Hard, attribute, operator, expected)},
 		Evidence:     []Evidence{evidence("e1", attribute, actual)},
 	})
@@ -236,18 +457,48 @@ func evaluateOne(t *testing.T, expected, actual Value, operator Operator) Report
 }
 
 func req(id string, severity Severity, attribute string, operator Operator, expected Value) Requirement {
-	return Requirement{ID: id, Severity: severity, Attribute: attribute, Operator: operator, Expected: expected}
+	return Requirement{ID: id, Severity: severity, Attribute: attribute, Scope: ItemScope, SubjectID: "item-1", Operator: operator, Expected: expected}
 }
 
 func evidence(id, attribute string, value Value) Evidence {
 	return Evidence{
-		ID: id, Attribute: attribute, Value: value,
+		ID: id, Attribute: attribute, Scope: ItemScope, SubjectID: "item-1",
+		ProductID: "product-1", VariantID: "variant-1", Value: value,
 		SourceID: "catalogue:item-123", ObservedAt: "2026-10-28T10:00:00Z",
 	}
 }
 
+func testSnapshot() CartSnapshot {
+	return CartSnapshot{
+		CartID: "cart-1", Currency: "INR", CapturedAt: "2026-10-28T10:00:00Z",
+		Items:         []CartItem{{ItemID: "item-1", ProductID: "product-1", VariantID: "variant-1", Quantity: 1, UnitPricePaise: 450000}},
+		ShippingPaise: 25000, DiscountPaise: 0, DeliveryDate: datePointer("2026-10-29"),
+	}
+}
+
+func datePointer(value string) *string { return &value }
+
+func cloneSnapshot(snapshot CartSnapshot) CartSnapshot {
+	snapshot.Items = append([]CartItem(nil), snapshot.Items...)
+	if snapshot.DeliveryDate != nil {
+		date := *snapshot.DeliveryDate
+		snapshot.DeliveryDate = &date
+	}
+	return snapshot
+}
+
+func snapshotHashForTest(t *testing.T, snapshot CartSnapshot) string {
+	t.Helper()
+	report, err := Evaluate(Input{CartSnapshot: snapshot})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return report.CartSnapshotSHA256
+}
+
 func cloneInput(input Input) Input {
 	return Input{
+		CartSnapshot: cloneSnapshot(input.CartSnapshot),
 		Requirements: append([]Requirement(nil), input.Requirements...),
 		Evidence:     append([]Evidence(nil), input.Evidence...),
 	}

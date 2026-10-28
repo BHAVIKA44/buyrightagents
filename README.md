@@ -8,21 +8,25 @@ An LLM may help interpret requirements, but it must not approve its own purchase
 
 ## Status
 
-Implemented: a minimal Go CLI and deterministic verifier for structured requirements and typed evidence. The verifier reports `PASS`, `FAIL`, or `UNKNOWN` per requirement and applies the `ALLOW`, `BLOCK`, or `REVIEW` policy locally.
+Implemented: a Go CLI and deterministic verifier for structured requirements, typed evidence, and validated INR cart snapshots. The verifier reports `PASS`, `FAIL`, or `UNKNOWN` per requirement and applies the `ALLOW`, `BLOCK`, or `REVIEW` policy locally.
 
-The evaluator does not bind a decision to an immutable cart snapshot and does not execute checkout or payments. Evidence is supplied as input; it is not fetched or independently authenticated.
+Every report includes a SHA-256 hash of a canonical snapshot representation. It covers cart identity, currency, capture time, item identities and product/variant IDs, quantities, unit prices, shipping, discount, and promised delivery date. Items are sorted by stable `item_id` before hashing, so equivalent item orderings have the same hash. Any snapshot change, including a changed delivery promise or cart identity, requires a fresh evaluation. A future checkout gate must compare the current snapshot hash with the report hash.
+
+Requirements and evidence identify either the cart or a specific cart item. Item evidence must name the matching product and variant in the snapshot. The verifier derives total price and promised delivery evidence from the local snapshot; caller evidence cannot override those cart-level facts.
+
+The hash binds the report to the supplied local snapshot; it does not authenticate that snapshot against a merchant's live cart or prove seller claims such as material or laptop fit. Evidence is supplied by the caller and is not independently authenticated. `ALLOW` is only the result of local evaluation; it does not execute checkout or authorize a payment.
 
 Not implemented: shopping agent, MCP server, LLM integration, database, or payment integration.
 
 ## Verify requirements
 
-Provide a JSON file containing `requirements` and `evidence`, then run:
+Provide a JSON file containing `cart_snapshot`, `requirements`, and `evidence`, then run:
 
 ```sh
 go run ./cmd/buyrightagents verify examples/vegan-backpack.json
 ```
 
-The included fictional backpack example evaluates to `ALLOW`. Its evidence is illustrative only and does not describe a real product. INR totals use paise (for example, `500000` paise is ₹5,000). Typed values use an explicit object such as `{"type":"number","value":500000}`.
+The included fictional backpack example evaluates to `ALLOW`. Its item costs ₹4,500 plus ₹250 delivery, for ₹4,750 total. Seller claims and cart facts are illustrative only and do not describe a real product or live merchant cart. INR amounts use paise (`475000` is ₹4,750). Typed values use an explicit object such as `{"type":"number","value":500000}`. Unknown JSON fields and duplicate object keys are rejected.
 
 ## Local setup
 
