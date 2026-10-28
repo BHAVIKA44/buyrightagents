@@ -343,6 +343,33 @@ func TestScopeAndItemEvidenceValidation(t *testing.T) {
 	}
 }
 
+func TestReservedDerivedAttributesRejectCallerEvidenceAtEveryScope(t *testing.T) {
+	snapshot := testSnapshot()
+	for _, attribute := range []string{"total_price_paise", "delivery_date"} {
+		for _, scope := range []Scope{CartScope, ItemScope} {
+			t.Run(string(scope)+"/"+attribute, func(t *testing.T) {
+				subjectID := snapshot.CartID
+				value := NumberInt64Value(475000)
+				evidenceItem := Evidence{ID: "caller", Attribute: attribute, Scope: CartScope, SubjectID: subjectID, Value: value, SourceID: "caller", ObservedAt: "2026-10-28T09:55:00Z"}
+				if attribute == "delivery_date" {
+					evidenceItem.Value = DateValue("2026-10-29")
+				}
+				if scope == ItemScope {
+					cartItem := snapshot.Items[0]
+					evidenceItem.Scope = ItemScope
+					evidenceItem.SubjectID = cartItem.ItemID
+					evidenceItem.ProductID = cartItem.ProductID
+					evidenceItem.VariantID = cartItem.VariantID
+				}
+				_, err := Evaluate(Input{CartSnapshot: snapshot, Evidence: []Evidence{evidenceItem}})
+				if err == nil || !strings.Contains(err.Error(), "cannot override cart snapshot") {
+					t.Fatalf("Evaluate error = %v, want reserved attribute rejection", err)
+				}
+			})
+		}
+	}
+}
+
 func TestSnapshotDerivedTotalAndDelivery(t *testing.T) {
 	totalRequirement := Requirement{
 		ID: "total", Attribute: "total_price_paise", Scope: CartScope, SubjectID: "cart-1",

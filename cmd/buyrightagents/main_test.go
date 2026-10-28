@@ -114,3 +114,46 @@ func TestRunVerifyErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestRunEvalReportsMetricsAndFailsOnMismatch(t *testing.T) {
+	validPath := filepath.Join(t.TempDir(), "cases.jsonl")
+	data, err := os.ReadFile(filepath.Join("..", "..", "evals", "cases.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(validPath, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"eval", validPath}, &stdout, &stderr); code != 0 {
+		t.Fatalf("eval code = %d, stderr %q, stdout %q", code, stderr.String(), stdout.String())
+	}
+	for _, want := range []string{"Cases evaluated: 64", "Decision accuracy", "Requirement outcome accuracy", "False-ALLOW rate", "Missed-BLOCK rate", "False-BLOCK rate", "Review rate", "Per-category decision accuracy", "Mismatches: none"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("eval output missing %q", want)
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected eval stderr: %s", stderr.String())
+	}
+
+	line := strings.SplitN(string(data), "\n", 2)[0]
+	line = strings.Replace(line, `"expected_decision":"ALLOW"`, `"expected_decision":"BLOCK"`, 1)
+	line = strings.Replace(line, `"expected_outcomes":{"baseline-1-claim":"PASS"}`, `"expected_outcomes":{"baseline-1-claim":"FAIL"}`, 1)
+	if line == strings.SplitN(string(data), "\n", 2)[0] {
+		t.Fatal("failed to alter expected decision for mismatch test")
+	}
+	if err := os.WriteFile(validPath, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"eval", validPath}, &stdout, &stderr); code != 1 {
+		t.Fatalf("mismatch eval code = %d, want 1; stdout %q stderr %q", code, stdout.String(), stderr.String())
+	}
+	for _, want := range []string{"baseline-01", "expected=BLOCK actual=ALLOW", "requirement baseline-1-claim expected=FAIL actual=PASS"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Errorf("mismatch output missing %q: %s", want, stdout.String())
+		}
+	}
+}

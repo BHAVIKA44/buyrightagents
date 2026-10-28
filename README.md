@@ -28,6 +28,17 @@ go run ./cmd/buyrightagents verify examples/vegan-backpack.json
 
 The included fictional backpack example evaluates to `ALLOW`. Its item costs ₹4,500 plus ₹250 delivery, for ₹4,750 total. Seller claims and cart facts are illustrative only and do not describe a real product or live merchant cart. INR amounts use paise (`475000` is ₹4,750). Typed values use an explicit object such as `{"type":"number","value":500000}`. Unknown JSON fields and duplicate object keys are rejected.
 
+## Offline adversarial evaluation
+
+The manually labelled synthetic corpus in `evals/cases.jsonl` contains 64 independent scenarios across baseline, hard failures, total price, delivery, missing/contradictory evidence, item scoping, preferences, and mixed requirements. Run it with:
+
+```sh
+go run ./cmd/buyrightagents eval evals/cases.jsonl
+make eval
+```
+
+The runner checks each decision and requirement outcome against its authored label, reports accuracy and safety-related rates with denominators, and exits nonzero for invalid cases or mismatches. See [`docs/EVALUATION.md`](docs/EVALUATION.md) for the format, metric definitions, and limitations. This suite measures agreement on synthetic cases; it does not establish real-world purchase correctness or authenticate seller claims.
+
 ## Local setup
 
 Install Go 1.22 or newer, then run:

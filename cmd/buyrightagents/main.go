@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/bhavika44/buyrightagents/internal/evaluation"
 	"github.com/bhavika44/buyrightagents/internal/verification"
 )
 
@@ -44,9 +45,41 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return reportError(stderr, "input file path is required")
 		}
 		return verifyFile(args[1], stdout, stderr)
+	case "eval":
+		if len(args) != 2 {
+			return reportError(stderr, "usage: buyrightagents eval <cases.jsonl>")
+		}
+		if args[1] == "" {
+			return reportError(stderr, "evaluation dataset path is required")
+		}
+		return evaluateFile(args[1], stdout, stderr)
 	default:
 		return reportError(stderr, fmt.Sprintf("unknown command %q; run 'buyrightagents help' for usage", args[0]))
 	}
+}
+
+func evaluateFile(path string, stdout, stderr io.Writer) int {
+	file, err := os.Open(path)
+	if err != nil {
+		return reportError(stderr, fmt.Sprintf("open evaluation dataset %q: %v", path, err))
+	}
+	defer file.Close()
+
+	cases, err := evaluation.LoadCases(file)
+	if err != nil {
+		return reportError(stderr, fmt.Sprintf("load evaluation dataset %q: %v", path, err))
+	}
+	summary, err := evaluation.Run(cases)
+	if err != nil {
+		return reportError(stderr, fmt.Sprintf("run evaluation dataset %q: %v", path, err))
+	}
+	evaluation.WriteSummary(stdout, summary)
+	for _, result := range summary.Cases {
+		if !result.DecisionMatches || len(result.MismatchedOutcomes) > 0 {
+			return 1
+		}
+	}
+	return 0
 }
 
 func verifyFile(path string, stdout, stderr io.Writer) int {
@@ -183,7 +216,7 @@ func scanJSONValue(decoder *json.Decoder) error {
 
 func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "BuyRightAgents: purchase requirement verification prototype")
-	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>]")
+	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|eval <cases.jsonl>]")
 }
 
 func reportError(writer io.Writer, message string) int {
