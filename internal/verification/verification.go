@@ -65,8 +65,12 @@ const (
 	NotEquals          Operator = "not_equals"
 	LessThanOrEqual    Operator = "less_than_or_equal"
 	GreaterThanOrEqual Operator = "greater_than_or_equal"
+	LessThan           Operator = "less_than"
+	GreaterThan        Operator = "greater_than"
 	BeforeOrEqual      Operator = "before_or_equal"
 	AfterOrEqual       Operator = "after_or_equal"
+	Before             Operator = "before"
+	After              Operator = "after"
 )
 
 type Outcome string
@@ -506,11 +510,13 @@ func validateBuiltInRequirement(requirement Requirement) error {
 		wantType = NumberType
 		allowedOperators = map[Operator]bool{
 			Equals: true, NotEquals: true, LessThanOrEqual: true, GreaterThanOrEqual: true,
+			LessThan: true, GreaterThan: true,
 		}
 	case "delivery_date":
 		wantType = DateType
 		allowedOperators = map[Operator]bool{
 			Equals: true, NotEquals: true, BeforeOrEqual: true, AfterOrEqual: true,
+			Before: true, After: true,
 		}
 	default:
 		return nil
@@ -594,11 +600,11 @@ func validateOperator(requirementID string, operator Operator, valueType ValueTy
 	switch operator {
 	case Equals, NotEquals:
 		return nil
-	case LessThanOrEqual, GreaterThanOrEqual:
+	case LessThanOrEqual, GreaterThanOrEqual, LessThan, GreaterThan:
 		if valueType != NumberType {
 			return fmt.Errorf("requirement %q operator %q requires a number value", requirementID, operator)
 		}
-	case BeforeOrEqual, AfterOrEqual:
+	case BeforeOrEqual, AfterOrEqual, Before, After:
 		if valueType != DateType {
 			return fmt.Errorf("requirement %q operator %q requires a date value", requirementID, operator)
 		}
@@ -619,10 +625,18 @@ func compare(operator Operator, expected, actual Value) Outcome {
 		satisfied = compareNumbers(actual.Value, expected.Value) <= 0
 	case GreaterThanOrEqual:
 		satisfied = compareNumbers(actual.Value, expected.Value) >= 0
+	case LessThan:
+		satisfied = compareNumbers(actual.Value, expected.Value) < 0
+	case GreaterThan:
+		satisfied = compareNumbers(actual.Value, expected.Value) > 0
 	case BeforeOrEqual:
 		satisfied = actual.Value.(string) <= expected.Value.(string)
 	case AfterOrEqual:
 		satisfied = actual.Value.(string) >= expected.Value.(string)
+	case Before:
+		satisfied = actual.Value.(string) < expected.Value.(string)
+	case After:
+		satisfied = actual.Value.(string) > expected.Value.(string)
 	}
 	if satisfied {
 		return Pass

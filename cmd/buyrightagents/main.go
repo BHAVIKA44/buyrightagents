@@ -2,13 +2,17 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/bhavika44/buyrightagents/internal/evaluation"
+	"github.com/bhavika44/buyrightagents/internal/intent"
 	"github.com/bhavika44/buyrightagents/internal/verification"
 )
 
@@ -53,9 +57,77 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return reportError(stderr, "evaluation dataset path is required")
 		}
 		return evaluateFile(args[1], stdout, stderr)
+	case "interpret":
+		return interpretCommand(args[1:], stdout, stderr)
+	case "eval-intent":
+		if len(args) != 1 {
+			return reportError(stderr, "usage: buyrightagents eval-intent")
+		}
+		return evaluateIntentCommand(stdout, stderr)
 	default:
 		return reportError(stderr, fmt.Sprintf("unknown command %q; run 'buyrightagents help' for usage", args[0]))
 	}
+}
+
+func interpretCommand(args []string, stdout, stderr io.Writer) int {
+	if len(args) < 3 || args[0] != "--reference-time" {
+		return reportError(stderr, "usage: buyrightagents interpret --reference-time <RFC3339> <request text>")
+	}
+	referenceTime := args[1]
+	if _, err := time.Parse(time.RFC3339Nano, referenceTime); err != nil {
+		return reportError(stderr, fmt.Sprintf("reference time %q must be RFC3339 with an offset", referenceTime))
+	}
+	requestText := strings.TrimSpace(strings.Join(args[2:], " "))
+	if requestText == "" {
+		return reportError(stderr, "request text is required")
+	}
+	config, err := intent.ConfigFromEnv()
+	if err != nil {
+		return reportError(stderr, err.Error())
+	}
+	client, err := intent.NewHTTPClient(config)
+	if err != nil {
+		return reportError(stderr, err.Error())
+	}
+	interpreted, err := (intent.Interpreter{Client: client}).Interpret(context.Background(), requestText, referenceTime)
+	if err != nil {
+		return reportError(stderr, err.Error())
+	}
+	encoder := json.NewEncoder(stdout)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(interpreted); err != nil {
+		return reportError(stderr, fmt.Sprintf("write intent: %v", err))
+	}
+	return 0
+}
+
+func evaluateIntentCommand(stdout, stderr io.Writer) int {
+	config, err := intent.ConfigFromEnv()
+	if err != nil {
+		return reportError(stderr, err.Error())
+	}
+	client, err := intent.NewHTTPClient(config)
+	if err != nil {
+		return reportError(stderr, err.Error())
+	}
+	file, err := os.Open("evals/intent-cases.jsonl")
+	if err != nil {
+		return reportError(stderr, fmt.Sprintf("open intent evaluation corpus: %v", err))
+	}
+	defer file.Close()
+	cases, err := intent.LoadIntentCases(file)
+	if err != nil {
+		return reportError(stderr, fmt.Sprintf("load intent evaluation corpus: %v", err))
+	}
+	summary, err := intent.EvaluateIntentCases(context.Background(), intent.Interpreter{Client: client}, cases)
+	if err != nil {
+		return reportError(stderr, fmt.Sprintf("run intent evaluation: %v", err))
+	}
+	intent.WriteIntentEvalSummary(stdout, summary, config.Model, client.Host())
+	if !summary.AllExact() {
+		return 1
+	}
+	return 0
 }
 
 func evaluateFile(path string, stdout, stderr io.Writer) int {
@@ -216,7 +288,8 @@ func scanJSONValue(decoder *json.Decoder) error {
 
 func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "BuyRightAgents: purchase requirement verification prototype")
-	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|eval <cases.jsonl>]")
+	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|eval <cases.jsonl>|interpret --reference-time <RFC3339> <request text>|eval-intent]")
+	fmt.Fprintln(writer, "Note: interpret and eval-intent contact the configured remote LLM; eval-intent may incur API charges.")
 }
 
 func reportError(writer io.Writer, message string) int {

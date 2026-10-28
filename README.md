@@ -2,13 +2,13 @@
 
 BuyRightAgents is an independent prototype exploring whether payment infrastructure could independently verify that a proposed agentic purchase satisfies the user's original requirements before checkout proceeds.
 
-For example, given a request for a vegan backpack that fits a 16-inch laptop, costs less than ₹5,000 including delivery, and arrives before Friday, a future verifier would evaluate the actual product and cart using evidence. It would report `PASS`, `FAIL`, or `UNKNOWN` for each requirement. Hard violations should block checkout; unresolved hard requirements should require human review. Decisions must bind to the exact cart, and any cart change requires revalidation.
+For example, given a request for a vegan backpack that fits a 16-inch laptop, costs less than ₹5,000 including delivery, and arrives before Friday, the intent interpreter can normalize the request. The deterministic verifier then accepts structured requirements and caller-supplied evidence against a specific cart snapshot, reporting `PASS`, `FAIL`, or `UNKNOWN` for each requirement. Hard violations block the local decision; unresolved hard requirements require review. Any cart change requires revalidation.
 
 An LLM may help interpret requirements, but it must not approve its own purchase. This is an independent prototype exploring a proposed capability. It does not claim Razorpay currently provides this exact feature or that no other company is working on it.
 
 ## Status
 
-Implemented: a Go CLI and deterministic verifier for structured requirements, typed evidence, and validated INR cart snapshots. The verifier reports `PASS`, `FAIL`, or `UNKNOWN` per requirement and applies the `ALLOW`, `BLOCK`, or `REVIEW` policy locally.
+Implemented: a Go CLI, an LLM-backed natural-language intent interpreter, and a deterministic verifier for structured requirements, typed evidence, and validated INR cart snapshots. The interpreter outputs requirements, clarification questions, and unsupported constraints; only the verifier reports `PASS`, `FAIL`, or `UNKNOWN` and applies the `ALLOW`, `BLOCK`, or `REVIEW` policy locally.
 
 Every report includes a SHA-256 hash of a canonical snapshot representation. It covers cart identity, currency, capture time, item identities and product/variant IDs, quantities, unit prices, shipping, discount, and promised delivery date. Items are sorted by stable `item_id` before hashing, so equivalent item orderings have the same hash. Any snapshot change, including a changed delivery promise or cart identity, requires a fresh evaluation. A future checkout gate must compare the current snapshot hash with the report hash.
 
@@ -16,7 +16,7 @@ Requirements and evidence identify either the cart or a specific cart item. Item
 
 The hash binds the report to the supplied local snapshot; it does not authenticate that snapshot against a merchant's live cart or prove seller claims such as material or laptop fit. Evidence is supplied by the caller and is not independently authenticated. `ALLOW` is only the result of local evaluation; it does not execute checkout or authorize a payment.
 
-Not implemented: shopping agent, MCP server, LLM integration, database, or payment integration.
+Not implemented: shopping agent, MCP server, evidence retrieval/authentication, database, checkout enforcement, or payment integration.
 
 ## Verify requirements
 
@@ -30,7 +30,7 @@ The included fictional backpack example evaluates to `ALLOW`. Its item costs ₹
 
 ## Offline adversarial evaluation
 
-The manually labelled synthetic corpus in `evals/cases.jsonl` contains 64 independent scenarios across baseline, hard failures, total price, delivery, missing/contradictory evidence, item scoping, preferences, and mixed requirements. Run it with:
+The manually labelled synthetic corpus in `evals/cases.jsonl` contains 67 independent scenarios across baseline, hard failures, total price, delivery, missing/contradictory evidence, item scoping, preferences, and mixed requirements. Run it with:
 
 ```sh
 go run ./cmd/buyrightagents eval evals/cases.jsonl
@@ -51,3 +51,19 @@ go vet ./...
 ```
 
 The project uses only the Go standard library.
+
+## Interpret a request
+
+Natural-language interpretation calls a configured remote OpenAI-compatible Chat Completions API. It requires an explicit reference timestamp and never chooses the machine's current date implicitly:
+
+```sh
+export BUYRIGHTAGENTS_LLM_API_KEY="..."
+export BUYRIGHTAGENTS_LLM_MODEL="your-model-id"
+# Optional; defaults to https://api.openai.com/v1
+export BUYRIGHTAGENTS_LLM_BASE_URL="https://api.openai.com/v1"
+go run ./cmd/buyrightagents interpret --reference-time "2026-10-28T16:48:00+05:30" "Find a vegan bag under ₹5,000 and ideally red."
+```
+
+The interpreter has no cart or evidence inputs and cannot return a purchase decision. Its output is an untrusted interpretation for later use. Evidence gathering, deterministic verification against a specific cart snapshot, and any future checkout authorization remain separate steps. API keys must be supplied through the environment and must never be committed.
+
+The separately invoked `eval-intent` command sends the labelled intent corpus to the configured model and may incur API charges. It is not run by `go test`, `make eval`, or ordinary validation. The corpus contains static authored expectations; tests use only fake clients and local mock servers.

@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -128,7 +131,7 @@ func TestRunEvalReportsMetricsAndFailsOnMismatch(t *testing.T) {
 	if code := run([]string{"eval", validPath}, &stdout, &stderr); code != 0 {
 		t.Fatalf("eval code = %d, stderr %q, stdout %q", code, stderr.String(), stdout.String())
 	}
-	for _, want := range []string{"Cases evaluated: 64", "Decision accuracy", "Requirement outcome accuracy", "False-ALLOW rate", "Missed-BLOCK rate", "False-BLOCK rate", "Review rate", "Per-category decision accuracy", "Mismatches: none"} {
+	for _, want := range []string{"Cases evaluated: 67", "Decision accuracy", "Requirement outcome accuracy", "False-ALLOW rate", "Missed-BLOCK rate", "False-BLOCK rate", "Review rate", "Per-category decision accuracy", "Mismatches: none"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("eval output missing %q", want)
 		}
@@ -155,5 +158,64 @@ func TestRunEvalReportsMetricsAndFailsOnMismatch(t *testing.T) {
 		if !strings.Contains(stdout.String(), want) {
 			t.Errorf("mismatch output missing %q: %s", want, stdout.String())
 		}
+	}
+}
+
+func TestInterpretCLIValidatesReferenceAndMissingConfiguration(t *testing.T) {
+	t.Setenv("BUYRIGHTAGENTS_LLM_API_KEY", "")
+	t.Setenv("BUYRIGHTAGENTS_LLM_MODEL", "")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"interpret", "--reference-time", "not-a-time", "vegan bag"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "RFC3339") {
+		t.Fatalf("invalid reference result code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("invalid reference printed stdout: %q", stdout.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run([]string{"interpret", "--reference-time", "2026-10-28T10:00:00Z", "vegan bag"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "BUYRIGHTAGENTS_LLM_API_KEY") {
+		t.Fatalf("missing config result code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("missing config printed stdout: %q", stdout.String())
+	}
+}
+
+func TestInterpretCLIUsesLocalMockAndPrintsOnlyValidatedIntent(t *testing.T) {
+	content := `{"requirements":[{"attribute":"vegan","operator":"equals","expected":{"type":"boolean","value":true},"severity":"hard","source_text":"Must be vegan"}],"clarification_questions":[],"unsupported_constraints":[]}`
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(writer).Encode(map[string]any{"choices": []any{map[string]any{"message": map[string]string{"content": content}}}})
+	}))
+	defer server.Close()
+	t.Setenv("BUYRIGHTAGENTS_LLM_API_KEY", "local-test-key")
+	t.Setenv("BUYRIGHTAGENTS_LLM_MODEL", "local-test-model")
+	t.Setenv("BUYRIGHTAGENTS_LLM_BASE_URL", server.URL)
+	args := []string{"interpret", "--reference-time", "2026-10-28T16:48:00+05:30", "Must be vegan."}
+	var stdout, stderr bytes.Buffer
+	if code := run(args, &stdout, &stderr); code != 0 {
+		t.Fatalf("interpret code=%d stderr=%q stdout=%q", code, stderr.String(), stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"attribute": "vegan"`) || !strings.Contains(stdout.String(), `"id": "requirement-`) || stderr.Len() != 0 {
+		t.Fatalf("unexpected intent output=%q stderr=%q", stdout.String(), stderr.String())
+	}
+
+	content = `{"requirements":[{"attribute":"vegan","operator":"equals","expected":{"type":"boolean","value":true},"severity":"hard","source_text":"not in request"}],"clarification_questions":[],"unsupported_constraints":[]}`
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(args, &stdout, &stderr); code == 0 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "not grounded") {
+		t.Fatalf("invalid model response code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+}
+
+func TestEvalIntentRequiresConfigurationWithoutCallingRemote(t *testing.T) {
+	t.Setenv("BUYRIGHTAGENTS_LLM_API_KEY", "")
+	t.Setenv("BUYRIGHTAGENTS_LLM_MODEL", "")
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"eval-intent"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "BUYRIGHTAGENTS_LLM_API_KEY") {
+		t.Fatalf("eval-intent missing config result code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("eval-intent missing config printed stdout: %q", stdout.String())
 	}
 }

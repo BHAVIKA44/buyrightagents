@@ -50,6 +50,27 @@ func TestNumericBoundaries(t *testing.T) {
 	}
 }
 
+func TestStrictNumericBoundaries(t *testing.T) {
+	for _, tt := range []struct {
+		name     string
+		operator Operator
+		actual   int64
+		want     Outcome
+	}{
+		{"less than below threshold", LessThan, 9, Pass},
+		{"less than equality fails", LessThan, 10, Fail},
+		{"greater than above threshold", GreaterThan, 11, Pass},
+		{"greater than equality fails", GreaterThan, 10, Fail},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			report := evaluateOne(t, NumberInt64Value(10), NumberInt64Value(tt.actual), tt.operator)
+			if got := report.Results[0].Outcome; got != tt.want {
+				t.Fatalf("outcome = %s, want %s", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNumberComparisonPreservesJSONPrecision(t *testing.T) {
 	report := evaluateOne(t,
 		Value{Type: NumberType, Value: json.Number("9007199254740992")},
@@ -75,6 +96,10 @@ func TestDateComparisons(t *testing.T) {
 		{"earlier date passes", BeforeOrEqual, "2026-10-29", Pass},
 		{"later date fails", BeforeOrEqual, "2026-10-31", Fail},
 		{"after or equal passes", AfterOrEqual, "2026-10-31", Pass},
+		{"strict before passes earlier", Before, "2026-10-29", Pass},
+		{"strict before rejects equality", Before, "2026-10-30", Fail},
+		{"strict after passes later", After, "2026-10-31", Pass},
+		{"strict after rejects equality", After, "2026-10-30", Fail},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			report := evaluateOne(t, DateValue("2026-10-30"), DateValue(tt.actual), tt.operator)

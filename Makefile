@@ -10,7 +10,7 @@ vet:
 	go vet ./...
 
 fmt:
-	gofmt -w cmd/buyrightagents/*.go internal/evaluation/*.go internal/verification/*.go
+	gofmt -w cmd/buyrightagents/*.go internal/evaluation/*.go internal/intent/*.go internal/verification/*.go
 
 lint: fmt vet
 
