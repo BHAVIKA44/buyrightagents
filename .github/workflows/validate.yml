@@ -1,0 +1,46 @@
+name: Validate BuyRightAgents
+
+on:
+  push:
+    branches:
+      - test/validation
+
+permissions:
+  contents: read
+
+jobs:
+  offline-validation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check Go formatting
+        shell: bash
+        run: |
+          files="$(gofmt -l cmd/buyrightagents internal/evaluation internal/intent internal/verification)"
+          if [[ -n "$files" ]]; then
+            printf 'Go files need gofmt:\n%s\n' "$files"
+            exit 1
+          fi
+
+      - name: Run tests
+        run: go test -count=1 ./...
+
+      - name: Run go vet
+        run: go vet ./...
+
+      - name: Build CLI
+        run: go build -o /tmp/buyrightagents ./cmd/buyrightagents
+
+      - name: Run deterministic verifier evaluation
+        run: make eval
+
+      - name: Run example verification
+        run: go run ./cmd/buyrightagents verify examples/vegan-backpack.json
