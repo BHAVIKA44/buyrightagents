@@ -1,0 +1,62 @@
+{
+  "requirements": [
+    {
+      "id": "vegan-material",
+      "attribute": "vegan",
+      "operator": "equals",
+      "expected": {"type": "boolean", "value": true},
+      "severity": "hard"
+    },
+    {
+      "id": "laptop-fit",
+      "attribute": "laptop_fit_inches",
+      "operator": "greater_than_or_equal",
+      "expected": {"type": "number", "value": 16},
+      "severity": "hard"
+    },
+    {
+      "id": "total-price",
+      "attribute": "total_price_paise",
+      "operator": "less_than_or_equal",
+      "expected": {"type": "number", "value": 500000},
+      "severity": "hard"
+    },
+    {
+      "id": "delivery-deadline",
+      "attribute": "delivery_date",
+      "operator": "before_or_equal",
+      "expected": {"type": "date", "value": "2026-10-30"},
+      "severity": "hard"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "catalogue-vegan-claim",
+      "attribute": "vegan",
+      "value": {"type": "boolean", "value": true},
+      "source_id": "fictional-catalogue:backpack-001",
+      "observed_at": "2026-10-28T10:00:00Z"
+    },
+    {
+      "id": "catalogue-laptop-fit",
+      "attribute": "laptop_fit_inches",
+      "value": {"type": "number", "value": 16},
+      "source_id": "fictional-catalogue:backpack-001",
+      "observed_at": "2026-10-28T10:00:00Z"
+    },
+    {
+      "id": "fictional-cart-total",
+      "attribute": "total_price_paise",
+      "value": {"type": "number", "value": 475000},
+      "source_id": "fictional-cart:cart-001",
+      "observed_at": "2026-10-28T10:05:00Z"
+    },
+    {
+      "id": "fictional-delivery-estimate",
+      "attribute": "delivery_date",
+      "value": {"type": "date", "value": "2026-10-29"},
+      "source_id": "fictional-cart:cart-001",
+      "observed_at": "2026-10-28T10:05:00Z"
+    }
+  ]
+}

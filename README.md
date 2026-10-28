@@ -8,9 +8,21 @@ An LLM may help interpret requirements, but it must not approve its own purchase
 
 ## Status
 
-Implemented: a minimal Go CLI with help and version commands.
+Implemented: a minimal Go CLI and deterministic verifier for structured requirements and typed evidence. The verifier reports `PASS`, `FAIL`, or `UNKNOWN` per requirement and applies the `ALLOW`, `BLOCK`, or `REVIEW` policy locally.
 
-Not implemented: shopping agent, MCP server, LLM integration, database, payment integration, and verification engine.
+The evaluator does not bind a decision to an immutable cart snapshot and does not execute checkout or payments. Evidence is supplied as input; it is not fetched or independently authenticated.
+
+Not implemented: shopping agent, MCP server, LLM integration, database, or payment integration.
+
+## Verify requirements
+
+Provide a JSON file containing `requirements` and `evidence`, then run:
+
+```sh
+go run ./cmd/buyrightagents verify examples/vegan-backpack.json
+```
+
+The included fictional backpack example evaluates to `ALLOW`. Its evidence is illustrative only and does not describe a real product. INR totals use paise (for example, `500000` paise is ₹5,000). Typed values use an explicit object such as `{"type":"number","value":500000}`.
 
 ## Local setup
 
@@ -23,4 +35,4 @@ go test ./...
 go vet ./...
 ```
 
-The initial project uses only the Go standard library.
+The project uses only the Go standard library.
