@@ -1,0 +1,20 @@
+# Go build output
+/buyrightagents
+/bin/
+/dist/
+*.test
+*.out
+/.tools/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.*
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
