@@ -212,10 +212,20 @@ func TestEvalIntentRequiresConfigurationWithoutCallingRemote(t *testing.T) {
 	t.Setenv("BUYRIGHTAGENTS_LLM_API_KEY", "")
 	t.Setenv("BUYRIGHTAGENTS_LLM_MODEL", "")
 	var stdout, stderr bytes.Buffer
-	if code := run([]string{"eval-intent"}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "BUYRIGHTAGENTS_LLM_API_KEY") {
+	if code := run([]string{"eval-intent", "--checkpoint", filepath.Join(t.TempDir(), "checkpoint.jsonl")}, &stdout, &stderr); code == 0 || !strings.Contains(stderr.String(), "BUYRIGHTAGENTS_LLM_API_KEY") {
 		t.Fatalf("eval-intent missing config result code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("eval-intent missing config printed stdout: %q", stdout.String())
+	}
+}
+
+func TestEvalIntentValidatesRequestIntervalWithoutCallingRemote(t *testing.T) {
+	t.Setenv("BUYRIGHTAGENTS_LLM_API_KEY", "")
+	t.Setenv("BUYRIGHTAGENTS_LLM_MODEL", "")
+	var stdout, stderr bytes.Buffer
+	code := run([]string{"eval-intent", "--checkpoint", filepath.Join(t.TempDir(), "checkpoint.jsonl"), "--request-interval", "fast"}, &stdout, &stderr)
+	if code == 0 || !strings.Contains(stderr.String(), "non-negative duration") || stdout.Len() != 0 {
+		t.Fatalf("invalid interval code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }

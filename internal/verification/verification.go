@@ -193,21 +193,78 @@ type Requirement struct {
 }
 
 type Evidence struct {
-	ID         string `json:"id"`
-	Attribute  string `json:"attribute"`
-	Scope      Scope  `json:"scope"`
-	SubjectID  string `json:"subject_id"`
-	ProductID  string `json:"product_id,omitempty"`
-	VariantID  string `json:"variant_id,omitempty"`
-	Value      Value  `json:"value"`
-	SourceID   string `json:"source_id"`
-	ObservedAt string `json:"observed_at"`
+	ID          string               `json:"id"`
+	Attribute   string               `json:"attribute"`
+	Scope       Scope                `json:"scope"`
+	SubjectID   string               `json:"subject_id"`
+	ProductID   string               `json:"product_id,omitempty"`
+	VariantID   string               `json:"variant_id,omitempty"`
+	Value       Value                `json:"value"`
+	SourceID    string               `json:"source_id"`
+	ObservedAt  string               `json:"observed_at"`
+	Attestation *EvidenceAttestation `json:"attestation,omitempty"`
+}
+
+const MockEvidenceAttestationV1 = "mock-evidence-v1"
+
+// EvidenceAttestation is an authenticated statement from a trusted mock
+// provider. The signature covers the provider identity, this exact evidence,
+// and the canonical cart snapshot hash. It is deliberately not a production
+// PKI or a claim about a real merchant.
+type EvidenceAttestation struct {
+	Version            string `json:"version"`
+	ProviderID         string `json:"provider_id"`
+	CartSnapshotSHA256 string `json:"cart_snapshot_sha256"`
+	Signature          string `json:"signature"`
+}
+
+// EvidenceAttestationVerifier verifies a provider-specific mock evidence
+// signature. Provider key material remains inside the provider implementation.
+type EvidenceAttestationVerifier interface {
+	VerifyMockEvidenceAttestation(payload []byte, signature string) bool
+}
+
+// EvidenceTrustPolicy determines whether caller-provided evidence may satisfy
+// requirements. When RequireAttestation is true, only evidence authenticated
+// by a configured provider and within the configured time window is usable.
+// ReferenceTime is deliberately injected for deterministic evaluation.
+type EvidenceTrustPolicy struct {
+	RequireAttestation bool
+	Providers          map[string]EvidenceAttestationVerifier
+	ReferenceTime      time.Time
+	MaxAge             time.Duration
+	FutureTolerance    time.Duration
+}
+
+type EvidenceTrustOutcome string
+
+const (
+	EvidenceTrusted          EvidenceTrustOutcome = "TRUSTED"
+	EvidenceMissingProof     EvidenceTrustOutcome = "MISSING_ATTESTATION"
+	EvidenceUnknownProvider  EvidenceTrustOutcome = "UNKNOWN_PROVIDER"
+	EvidenceInvalidProof     EvidenceTrustOutcome = "INVALID_ATTESTATION"
+	EvidenceSnapshotMismatch EvidenceTrustOutcome = "SNAPSHOT_MISMATCH"
+	EvidenceStale            EvidenceTrustOutcome = "STALE"
+	EvidenceFutureDated      EvidenceTrustOutcome = "FUTURE_DATED"
+)
+
+// EvidenceTrustAssessment explains whether a supplied evidence record was
+// eligible to influence a verification result. Untrusted records are excluded
+// rather than treated as negative product claims.
+type EvidenceTrustAssessment struct {
+	EvidenceID string               `json:"evidence_id"`
+	ProviderID string               `json:"provider_id,omitempty"`
+	Outcome    EvidenceTrustOutcome `json:"outcome"`
+	Reason     string               `json:"reason,omitempty"`
 }
 
 type Input struct {
 	CartSnapshot CartSnapshot  `json:"cart_snapshot"`
 	Requirements []Requirement `json:"requirements"`
 	Evidence     []Evidence    `json:"evidence"`
+	// EvidencePolicy is process configuration, not caller-supplied JSON.
+	// Nil preserves the legacy verifier mode used by offline corpus tests.
+	EvidencePolicy *EvidenceTrustPolicy `json:"-"`
 }
 
 type EvidenceAssessment struct {
@@ -235,10 +292,11 @@ type RequirementResult struct {
 }
 
 type Report struct {
-	Decision           Decision            `json:"decision"`
-	CartSnapshotSHA256 string              `json:"cart_snapshot_sha256"`
-	Evidence           []Evidence          `json:"evidence"`
-	Results            []RequirementResult `json:"results"`
+	Decision           Decision                  `json:"decision"`
+	CartSnapshotSHA256 string                    `json:"cart_snapshot_sha256"`
+	Evidence           []Evidence                `json:"evidence"`
+	EvidenceTrust      []EvidenceTrustAssessment `json:"evidence_trust,omitempty"`
+	Results            []RequirementResult       `json:"results"`
 }
 
 // Evaluate validates the cart and all evidence, derives cart-level facts, and
@@ -256,8 +314,13 @@ func Evaluate(input Input) (Report, error) {
 	if err != nil {
 		return Report{}, err
 	}
+	if input.EvidencePolicy != nil {
+		if err := input.EvidencePolicy.validate(); err != nil {
+			return Report{}, err
+		}
+	}
 
-	evidence := append([]Evidence(nil), input.Evidence...)
+	evidence, trust := trustedEvidence(input.Evidence, input.EvidencePolicy, hash)
 	evidence = append(evidence, Evidence{
 		ID: "cart-snapshot:total-price-paise", Attribute: "total_price_paise",
 		Scope: CartScope, SubjectID: input.CartSnapshot.CartID,
@@ -277,6 +340,7 @@ func Evaluate(input Input) (Report, error) {
 		Results:            make([]RequirementResult, 0, len(input.Requirements)),
 		CartSnapshotSHA256: hash,
 		Evidence:           evidence,
+		EvidenceTrust:      trust,
 	}
 	hardCount := 0
 	hardFailed := false
@@ -301,7 +365,16 @@ func Evaluate(input Input) (Report, error) {
 				continue
 			}
 			matched = true
-			assessmentOutcome := compare(requirement.Operator, requirement.Expected, item.Value)
+			expected, observed := requirement.Expected, item.Value
+			if requirement.Attribute == "product_category" {
+				if expectedText, ok := expected.Value.(string); ok {
+					expected = StringValue(NormalizeCategory(expectedText))
+				}
+				if observedText, ok := observed.Value.(string); ok {
+					observed = StringValue(NormalizeCategory(observedText))
+				}
+			}
+			assessmentOutcome := compare(requirement.Operator, expected, observed)
 			result.Assessments = append(result.Assessments, EvidenceAssessment{
 				EvidenceID: item.ID, Value: item.Value, Scope: item.Scope, SubjectID: item.SubjectID,
 				ProductID: item.ProductID, VariantID: item.VariantID,
@@ -344,6 +417,129 @@ func Evaluate(input Input) (Report, error) {
 		report.Decision = Allow
 	}
 	return report, nil
+}
+
+// NormalizeCategory applies conservative case and whitespace normalization to a free-form category label.
+func NormalizeCategory(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+// SnapshotSHA256 returns the canonical hash only for a structurally valid cart
+// snapshot. Mock evidence providers use it to bind an attestation to the exact
+// cart context in which a claim was observed.
+func SnapshotSHA256(snapshot CartSnapshot) (string, error) {
+	if _, err := validateCartSnapshot(snapshot); err != nil {
+		return "", err
+	}
+	return hashSnapshot(snapshot)
+}
+
+type canonicalEvidenceAttestation struct {
+	Version            string `json:"version"`
+	ProviderID         string `json:"provider_id"`
+	CartSnapshotSHA256 string `json:"cart_snapshot_sha256"`
+	EvidenceID         string `json:"evidence_id"`
+	Attribute          string `json:"attribute"`
+	Scope              Scope  `json:"scope"`
+	SubjectID          string `json:"subject_id"`
+	ProductID          string `json:"product_id,omitempty"`
+	VariantID          string `json:"variant_id,omitempty"`
+	Value              Value  `json:"value"`
+	SourceID           string `json:"source_id"`
+	ObservedAt         string `json:"observed_at"`
+}
+
+// EvidenceAttestationPayload returns the exact deterministic bytes a mock
+// provider signs and the verifier checks. Attestation.Signature is excluded to
+// avoid self-reference.
+func EvidenceAttestationPayload(attestation EvidenceAttestation, evidence Evidence) ([]byte, error) {
+	if attestation.Version != MockEvidenceAttestationV1 {
+		return nil, fmt.Errorf("unsupported evidence attestation version %q", attestation.Version)
+	}
+	if strings.TrimSpace(attestation.ProviderID) == "" || strings.TrimSpace(attestation.CartSnapshotSHA256) == "" {
+		return nil, errors.New("evidence attestation provider_id and cart_snapshot_sha256 are required")
+	}
+	return json.Marshal(canonicalEvidenceAttestation{
+		Version: attestation.Version, ProviderID: attestation.ProviderID, CartSnapshotSHA256: attestation.CartSnapshotSHA256,
+		EvidenceID: evidence.ID, Attribute: evidence.Attribute, Scope: evidence.Scope, SubjectID: evidence.SubjectID,
+		ProductID: evidence.ProductID, VariantID: evidence.VariantID, Value: evidence.Value,
+		SourceID: evidence.SourceID, ObservedAt: evidence.ObservedAt,
+	})
+}
+
+func (policy EvidenceTrustPolicy) validate() error {
+	if !policy.RequireAttestation {
+		return nil
+	}
+	if policy.ReferenceTime.IsZero() {
+		return errors.New("trusted evidence policy requires an injected reference time")
+	}
+	if policy.MaxAge <= 0 {
+		return errors.New("trusted evidence policy max age must be positive")
+	}
+	if policy.FutureTolerance < 0 {
+		return errors.New("trusted evidence policy future tolerance must not be negative")
+	}
+	return nil
+}
+
+func trustedEvidence(input []Evidence, policy *EvidenceTrustPolicy, snapshotHash string) ([]Evidence, []EvidenceTrustAssessment) {
+	if policy == nil || !policy.RequireAttestation {
+		return append([]Evidence(nil), input...), nil
+	}
+	accepted := make([]Evidence, 0, len(input))
+	assessments := make([]EvidenceTrustAssessment, 0, len(input))
+	for _, evidence := range input {
+		assessment := policy.assess(snapshotHash, evidence)
+		assessments = append(assessments, assessment)
+		if assessment.Outcome == EvidenceTrusted {
+			accepted = append(accepted, evidence)
+		}
+	}
+	return accepted, assessments
+}
+
+func (policy EvidenceTrustPolicy) assess(snapshotHash string, evidence Evidence) EvidenceTrustAssessment {
+	assessment := EvidenceTrustAssessment{EvidenceID: evidence.ID}
+	if evidence.Attestation == nil {
+		assessment.Outcome, assessment.Reason = EvidenceMissingProof, "evidence has no trusted mock-provider attestation"
+		return assessment
+	}
+	attestation := *evidence.Attestation
+	assessment.ProviderID = attestation.ProviderID
+	if attestation.Version != MockEvidenceAttestationV1 {
+		assessment.Outcome, assessment.Reason = EvidenceInvalidProof, "evidence attestation has an unsupported version"
+		return assessment
+	}
+	provider, known := policy.Providers[attestation.ProviderID]
+	if !known || provider == nil {
+		assessment.Outcome, assessment.Reason = EvidenceUnknownProvider, "evidence provider is not trusted by this policy"
+		return assessment
+	}
+	if attestation.CartSnapshotSHA256 != snapshotHash {
+		assessment.Outcome, assessment.Reason = EvidenceSnapshotMismatch, "evidence attestation is bound to a different cart snapshot"
+		return assessment
+	}
+	payload, err := EvidenceAttestationPayload(attestation, evidence)
+	if err != nil || !provider.VerifyMockEvidenceAttestation(payload, attestation.Signature) {
+		assessment.Outcome, assessment.Reason = EvidenceInvalidProof, "evidence attestation does not authenticate the supplied claim"
+		return assessment
+	}
+	observedAt, err := time.Parse(time.RFC3339Nano, evidence.ObservedAt)
+	if err != nil {
+		assessment.Outcome, assessment.Reason = EvidenceInvalidProof, "evidence observation time is invalid"
+		return assessment
+	}
+	if observedAt.After(policy.ReferenceTime.Add(policy.FutureTolerance)) {
+		assessment.Outcome, assessment.Reason = EvidenceFutureDated, "evidence observation time exceeds the future tolerance"
+		return assessment
+	}
+	if observedAt.Before(policy.ReferenceTime.Add(-policy.MaxAge)) {
+		assessment.Outcome, assessment.Reason = EvidenceStale, "evidence exceeds the configured freshness window"
+		return assessment
+	}
+	assessment.Outcome = EvidenceTrusted
+	return assessment
 }
 
 func validateCartSnapshot(snapshot CartSnapshot) (int64, error) {

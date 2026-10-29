@@ -25,6 +25,9 @@ type IntentCase struct {
 type IntentCaseResult struct {
 	Case            IntentCase
 	Actual          PurchaseIntent
+	Valid           bool
+	ErrorCategory   string
+	Diagnostic      string
 	RequestExact    bool
 	ClarificationOK bool
 }
@@ -38,14 +41,17 @@ type Counts struct {
 type IntentEvalSummary struct {
 	Results              []IntentCaseResult
 	CasesRun             int
+	ValidResponses       int
+	InvalidResponses     int
 	ExactRequests        int
+	ValidExactRequests   int
 	ClarificationCorrect int
 	Constraints          Counts
 	Unsupported          Counts
 }
 
 func (summary IntentEvalSummary) AllExact() bool {
-	if summary.CasesRun == 0 || summary.ExactRequests != summary.CasesRun {
+	if summary.CasesRun == 0 || summary.InvalidResponses != 0 || summary.ExactRequests != summary.CasesRun {
 		return false
 	}
 	for _, result := range summary.Results {
@@ -111,7 +117,7 @@ func LoadIntentCases(reader io.Reader) ([]IntentCase, error) {
 			return nil, fmt.Errorf("line %d case %q: expected_intent requires all three arrays", line, *wire.ID)
 		}
 		modelOutput := toModelOutput(expected)
-		if _, err := validateOutput(modelOutput, *wire.Request, reference); err != nil {
+		if _, err := validateOutputWithoutCoverage(modelOutput, *wire.Request, reference); err != nil {
 			return nil, fmt.Errorf("line %d case %q expected_intent invalid: %w", line, *wire.ID, err)
 		}
 		cases = append(cases, IntentCase{ID: *wire.ID, Request: *wire.Request, ReferenceTime: *wire.ReferenceTime, ExpectedIntent: expected})
@@ -164,41 +170,154 @@ func EvaluateIntentCases(ctx context.Context, interpreter Interpreter, cases []I
 		if err != nil {
 			return IntentEvalSummary{}, fmt.Errorf("intent case %q: %w", item.ID, err)
 		}
-		exact := exactIntentMatch(item.ExpectedIntent, actual)
-		clarificationOK := (len(item.ExpectedIntent.ClarificationQuestions) > 0) == (len(actual.ClarificationQuestions) > 0)
-		if exact {
-			summary.ExactRequests++
-		}
-		if clarificationOK {
-			summary.ClarificationCorrect++
-		}
-		addCounts(&summary.Constraints, requirementKeys(item.ExpectedIntent.Requirements), requirementKeys(actual.Requirements))
-		addCounts(&summary.Unsupported, unsupportedKeys(item.ExpectedIntent.UnsupportedConstraints), unsupportedKeys(actual.UnsupportedConstraints))
-		summary.CasesRun++
-		summary.Results = append(summary.Results, IntentCaseResult{Case: item, Actual: actual, RequestExact: exact, ClarificationOK: clarificationOK})
+		addIntentCaseResult(&summary, item, actual)
 	}
 	return summary, nil
 }
 
+func addIntentCaseResult(summary *IntentEvalSummary, item IntentCase, actual PurchaseIntent) {
+	exact := exactIntentMatch(item.ExpectedIntent, actual)
+	clarificationOK := (len(item.ExpectedIntent.ClarificationQuestions) > 0) == (len(actual.ClarificationQuestions) > 0)
+	if exact {
+		summary.ExactRequests++
+		summary.ValidExactRequests++
+	}
+	if clarificationOK {
+		summary.ClarificationCorrect++
+	}
+	addCounts(&summary.Constraints, requirementKeys(item.ExpectedIntent.Requirements), requirementKeys(actual.Requirements))
+	addUnsupportedCounts(&summary.Unsupported, item.ExpectedIntent.UnsupportedConstraints, actual.UnsupportedConstraints)
+	summary.CasesRun++
+	summary.ValidResponses++
+	summary.Results = append(summary.Results, IntentCaseResult{Case: item, Actual: actual, Valid: true, RequestExact: exact, ClarificationOK: clarificationOK})
+}
+
+func addInvalidIntentCaseResult(summary *IntentEvalSummary, item IntentCase, category, diagnostic string) {
+	addCounts(&summary.Constraints, requirementKeys(item.ExpectedIntent.Requirements), nil)
+	addUnsupportedCounts(&summary.Unsupported, item.ExpectedIntent.UnsupportedConstraints, nil)
+	summary.CasesRun++
+	summary.InvalidResponses++
+	summary.Results = append(summary.Results, IntentCaseResult{
+		Case: item, Valid: false, ErrorCategory: category, Diagnostic: diagnostic,
+		RequestExact: false, ClarificationOK: false,
+	})
+}
+
 func exactIntentMatch(expected, actual PurchaseIntent) bool {
-	return sameStrings(fullRequirementKeys(expected.Requirements), fullRequirementKeys(actual.Requirements)) &&
-		sameStrings(clarificationKeys(expected.ClarificationQuestions), clarificationKeys(actual.ClarificationQuestions)) &&
-		sameStrings(unsupportedKeys(expected.UnsupportedConstraints), unsupportedKeys(actual.UnsupportedConstraints))
+	return sameRequirementInterpretations(expected.Requirements, actual.Requirements) &&
+		sameClarificationInterpretations(expected.ClarificationQuestions, actual.ClarificationQuestions) &&
+		sameUnsupportedInterpretations(expected.UnsupportedConstraints, actual.UnsupportedConstraints)
+}
+
+func sameRequirementInterpretations(expected, actual []Requirement) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	used := make([]bool, len(actual))
+	for _, left := range expected {
+		matched := false
+		for index, right := range actual {
+			if used[index] {
+				continue
+			}
+			if left.Attribute == right.Attribute && left.Operator == right.Operator && valueKey(left.Expected) == valueKey(right.Expected) && left.Severity == right.Severity && equivalentSourceSpan(left.SourceText, right.SourceText) {
+				used[index], matched = true, true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func sameClarificationInterpretations(expected, actual []ClarificationQuestion) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	used := make([]bool, len(actual))
+	for _, left := range expected {
+		matched := false
+		for index, right := range actual {
+			if used[index] {
+				continue
+			}
+			if equivalentSourceSpan(left.SourceText, right.SourceText) && clarificationFocus(left.Question) == clarificationFocus(right.Question) {
+				used[index], matched = true, true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func sameUnsupportedInterpretations(expected, actual []UnsupportedConstraint) bool {
+	if len(expected) != len(actual) {
+		return false
+	}
+	used := make([]bool, len(actual))
+	for _, left := range expected {
+		matched := false
+		for index, right := range actual {
+			if used[index] {
+				continue
+			}
+			if equivalentSourceSpan(left.SourceText, right.SourceText) && normalizeText(left.Reason) == normalizeText(right.Reason) {
+				used[index], matched = true, true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	return true
+}
+
+func equivalentSourceSpan(expected, actual string) bool {
+	left, right := normalizeText(expected), normalizeText(actual)
+	if left == "" || right == "" {
+		return false
+	}
+	if left == right {
+		return true
+	}
+	if containsNormalized(" "+left+" ", right) {
+		return safeSourceSpanExtension(right, left)
+	}
+	if containsNormalized(" "+right+" ", left) {
+		return safeSourceSpanExtension(left, right)
+	}
+	return false
+}
+
+func safeSourceSpanExtension(phrase, extended string) bool {
+	for _, negation := range []string{"not", "no", "never", "without", "non"} {
+		if containsNormalized(extended, negation+" "+phrase) {
+			return false
+		}
+	}
+	return true
+}
+
+func clarificationFocus(question string) string {
+	normalized := normalizeText(question)
+	hasHard := containsNormalized(normalized, "hard") || containsNormalized(normalized, "mandatory") || containsNormalized(normalized, "must have")
+	hasPreference := containsNormalized(normalized, "preference") || containsNormalized(normalized, "prefer") || containsNormalized(normalized, "optional")
+	if hasHard && hasPreference {
+		return "severity"
+	}
+	return normalized
 }
 
 func requirementKeys(requirements []Requirement) []string {
 	keys := make([]string, len(requirements))
 	for index, requirement := range requirements {
 		keys[index] = strings.Join([]string{requirement.Attribute, string(requirement.Operator), valueKey(requirement.Expected), string(requirement.Severity)}, "\x1f")
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func fullRequirementKeys(requirements []Requirement) []string {
-	keys := make([]string, len(requirements))
-	for index, requirement := range requirements {
-		keys[index] = strings.Join([]string{requirement.Attribute, string(requirement.Operator), valueKey(requirement.Expected), string(requirement.Severity), normalizeText(requirement.SourceText)}, "\x1f")
 	}
 	sort.Strings(keys)
 	return keys
@@ -214,22 +333,27 @@ func valueKey(value verification.Value) string {
 	return string(value.Type) + ":" + string(encoded)
 }
 
-func clarificationKeys(questions []ClarificationQuestion) []string {
-	keys := make([]string, len(questions))
-	for index, question := range questions {
-		keys[index] = normalizeText(question.Question) + "\x1f" + normalizeText(question.SourceText)
+func addUnsupportedCounts(counts *Counts, expected, actual []UnsupportedConstraint) {
+	used := make([]bool, len(actual))
+	for _, want := range expected {
+		matched := false
+		for index, got := range actual {
+			if !used[index] && equivalentSourceSpan(want.SourceText, got.SourceText) {
+				used[index], matched = true, true
+				break
+			}
+		}
+		if matched {
+			counts.TruePositive++
+		} else {
+			counts.FalseNegative++
+		}
 	}
-	sort.Strings(keys)
-	return keys
-}
-
-func unsupportedKeys(constraints []UnsupportedConstraint) []string {
-	keys := make([]string, len(constraints))
-	for index, constraint := range constraints {
-		keys[index] = normalizeText(constraint.SourceText) + "\x1f" + normalizeText(constraint.Reason)
+	for index := range actual {
+		if !used[index] {
+			counts.FalsePositive++
+		}
 	}
-	sort.Strings(keys)
-	return keys
 }
 
 func sameStrings(left, right []string) bool {
@@ -288,13 +412,19 @@ func precisionRecallF1(counts Counts) (precision, recall, f1 string) {
 
 func WriteIntentEvalSummary(writer io.Writer, summary IntentEvalSummary, model, endpointHost string) {
 	fmt.Fprintf(writer, "Intent evaluation cases run: %d\nModel: %s\nEndpoint host: %s\n", summary.CasesRun, model, endpointHost)
+	fmt.Fprintf(writer, "Model-response validity: %s (%d valid, %d invalid)\n", metricRatio(summary.ValidResponses, summary.CasesRun), summary.ValidResponses, summary.InvalidResponses)
 	fmt.Fprintf(writer, "Exact request-level interpretation matches: %s\n", metricRatio(summary.ExactRequests, summary.CasesRun))
+	fmt.Fprintf(writer, "Exact request-level matches among schema-valid responses: %s\n", metricRatio(summary.ValidExactRequests, summary.ValidResponses))
 	fmt.Fprintf(writer, "Clarification detection accuracy: %s\n", metricRatio(summary.ClarificationCorrect, summary.CasesRun))
 	precision, recall, f1 := precisionRecallF1(summary.Constraints)
 	fmt.Fprintf(writer, "Constraint exact-match precision / recall / F1: %s / %s / %s (TP=%d FP=%d FN=%d)\n", precision, recall, f1, summary.Constraints.TruePositive, summary.Constraints.FalsePositive, summary.Constraints.FalseNegative)
 	precision, recall, f1 = precisionRecallF1(summary.Unsupported)
 	fmt.Fprintf(writer, "Unsupported-constraint exact-match precision / recall / F1: %s / %s / %s (TP=%d FP=%d FN=%d)\n", precision, recall, f1, summary.Unsupported.TruePositive, summary.Unsupported.FalsePositive, summary.Unsupported.FalseNegative)
 	for _, result := range summary.Results {
+		if !result.Valid {
+			fmt.Fprintf(writer, "\nInvalid response %s\n  request: %s\n  error category: %s\n  diagnostic: %s\n  raw response preserved: no\n", result.Case.ID, result.Case.Request, result.ErrorCategory, result.Diagnostic)
+			continue
+		}
 		if result.RequestExact && result.ClarificationOK {
 			continue
 		}

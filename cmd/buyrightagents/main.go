@@ -49,6 +49,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return reportError(stderr, "input file path is required")
 		}
 		return verifyFile(args[1], stdout, stderr)
+	case "check":
+		return checkCommand(args[1:], stdout, stderr, nil)
+	case "mock-checkout":
+		return mockCheckoutCommand(args[1:], stdout, stderr, nil, nil)
 	case "eval":
 		if len(args) != 2 {
 			return reportError(stderr, "usage: buyrightagents eval <cases.jsonl>")
@@ -60,10 +64,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "interpret":
 		return interpretCommand(args[1:], stdout, stderr)
 	case "eval-intent":
-		if len(args) != 1 {
-			return reportError(stderr, "usage: buyrightagents eval-intent")
-		}
-		return evaluateIntentCommand(stdout, stderr)
+		return evaluateIntentCommand(args[1:], stdout, stderr)
+	case "adversarial-eval":
+		return adversarialEvalCommand(args[1:], stdout, stderr)
+	case "saved-groq-checkout-eval":
+		return savedGroqCheckoutEvalCommand(args[1:], stdout, stderr)
 	default:
 		return reportError(stderr, fmt.Sprintf("unknown command %q; run 'buyrightagents help' for usage", args[0]))
 	}
@@ -89,7 +94,7 @@ func interpretCommand(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportError(stderr, err.Error())
 	}
-	interpreted, err := (intent.Interpreter{Client: client}).Interpret(context.Background(), requestText, referenceTime)
+	interpreted, _, err := (intent.Interpreter{Client: client, Repair: intent.RepairPolicy{MaxAttempts: config.RepairAttempts}}).InterpretWithMetadata(context.Background(), requestText, referenceTime)
 	if err != nil {
 		return reportError(stderr, err.Error())
 	}
@@ -101,7 +106,47 @@ func interpretCommand(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-func evaluateIntentCommand(stdout, stderr io.Writer) int {
+func evaluateIntentCommand(args []string, stdout, stderr io.Writer) int {
+	checkpointPath := ""
+	datasetPath := "evals/intent-cases.jsonl"
+	resume := false
+	requestInterval := 3 * time.Second
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--checkpoint":
+			if checkpointPath != "" || index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+				return reportError(stderr, "usage: buyrightagents eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]")
+			}
+			checkpointPath = args[index+1]
+			index++
+		case "--resume":
+			if resume {
+				return reportError(stderr, "--resume may only be specified once")
+			}
+			resume = true
+		case "--request-interval":
+			if index+1 >= len(args) {
+				return reportError(stderr, "usage: buyrightagents eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]")
+			}
+			parsed, err := time.ParseDuration(args[index+1])
+			if err != nil || parsed < 0 {
+				return reportError(stderr, "request interval must be a non-negative duration such as 3s or 0s")
+			}
+			requestInterval = parsed
+			index++
+		case "--dataset":
+			if index+1 >= len(args) || strings.HasPrefix(args[index+1], "--") {
+				return reportError(stderr, "usage: buyrightagents eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]")
+			}
+			datasetPath = args[index+1]
+			index++
+		default:
+			return reportError(stderr, "usage: buyrightagents eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]")
+		}
+	}
+	if checkpointPath == "" {
+		return reportError(stderr, "usage: buyrightagents eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]")
+	}
 	config, err := intent.ConfigFromEnv()
 	if err != nil {
 		return reportError(stderr, err.Error())
@@ -110,24 +155,40 @@ func evaluateIntentCommand(stdout, stderr io.Writer) int {
 	if err != nil {
 		return reportError(stderr, err.Error())
 	}
-	file, err := os.Open("evals/intent-cases.jsonl")
+	dataset, err := os.ReadFile(datasetPath)
 	if err != nil {
-		return reportError(stderr, fmt.Sprintf("open intent evaluation corpus: %v", err))
+		return reportError(stderr, fmt.Sprintf("read intent evaluation corpus %q: %v", datasetPath, err))
 	}
-	defer file.Close()
-	cases, err := intent.LoadIntentCases(file)
+	cases, err := intent.LoadIntentCases(bytes.NewReader(dataset))
 	if err != nil {
 		return reportError(stderr, fmt.Sprintf("load intent evaluation corpus: %v", err))
 	}
-	summary, err := intent.EvaluateIntentCases(context.Background(), intent.Interpreter{Client: client}, cases)
+	fmt.Fprintf(stdout, "Intent evaluation configuration: model=%s endpoint=%s request-interval=%s dataset=%s checkpoint=%s\n", config.Model, config.BaseURL, requestInterval, datasetPath, checkpointPath)
+	summary, err := intent.RunIntentEvaluationCheckpointed(context.Background(), intent.Interpreter{Client: client}, cases, intent.IntentCheckpointOptions{
+		Dataset: dataset, Model: config.Model, Endpoint: config.BaseURL, Path: checkpointPath,
+		Resume: resume, RequestInterval: requestInterval, Progress: stdout,
+	})
 	if err != nil {
+		var caseFailure *intent.CaseEvaluationFailure
+		if errors.As(err, &caseFailure) {
+			fmt.Fprintf(stdout, "\nIntent evaluation INCOMPLETE: %d/%d cases have recorded outcomes; stopped at case %s; error category: %s.\n", summary.CasesRun, len(cases), caseFailure.CaseID, caseFailure.Category)
+			fmt.Fprintln(stdout, "Partial metrics only (not final corpus metrics):")
+			intent.WriteIntentEvalSummary(stdout, summary, config.Model, client.Host())
+			fmt.Fprintf(stdout, "Resume command: buyrightagents eval-intent --checkpoint %s --resume --request-interval %s --dataset %s\n", shellQuote(checkpointPath), requestInterval, shellQuote(datasetPath))
+			return reportError(stderr, err.Error())
+		}
 		return reportError(stderr, fmt.Sprintf("run intent evaluation: %v", err))
 	}
+	fmt.Fprintf(stdout, "\nIntent evaluation COMPLETE: %d/%d cases have recorded outcomes (%d valid, %d invalid).\n", summary.CasesRun, len(cases), summary.ValidResponses, summary.InvalidResponses)
 	intent.WriteIntentEvalSummary(stdout, summary, config.Model, client.Host())
 	if !summary.AllExact() {
 		return 1
 	}
 	return 0
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func evaluateFile(path string, stdout, stderr io.Writer) int {
@@ -288,8 +349,8 @@ func scanJSONValue(decoder *json.Decoder) error {
 
 func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "BuyRightAgents: purchase requirement verification prototype")
-	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|eval <cases.jsonl>|interpret --reference-time <RFC3339> <request text>|eval-intent]")
-	fmt.Fprintln(writer, "Note: interpret and eval-intent contact the configured remote LLM; eval-intent may incur API charges.")
+	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|check --reference-time <RFC3339> --cart <cart.json> <request text>|mock-checkout --reference-time <RFC3339> --cart <cart.json> [--checkout-cart <cart.json>] [--checkout-request <request>] <request text>|eval <cases.jsonl>|adversarial-eval --dataset <cases.jsonl> --json <results.json> --report <report.md>|saved-groq-checkout-eval --dataset <cases.jsonl> --checkpoint <saved.jsonl> --manifest <manifest.json> --json <results.json> --report <report.md> [--freeze-only]|interpret --reference-time <RFC3339> <request text>|eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]]")
+	fmt.Fprintln(writer, "Note: adversarial-eval is offline. Check, interpret, mock-checkout, and eval-intent contact the configured remote LLM; mock-checkout also requires configured mock-provider evidence attestations; eval-intent may incur API charges.")
 }
 
 func reportError(writer io.Writer, message string) int {

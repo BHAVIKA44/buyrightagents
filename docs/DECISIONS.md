@@ -28,13 +28,23 @@ The standard-library HTTP client reads `BUYRIGHTAGENTS_LLM_API_KEY` and `BUYRIGH
 
 ## Bind each report to a canonical snapshot
 
-Hash a fixed struct representation of the full INR snapshot with item rows sorted by `item_id`. The report includes the SHA-256 digest. Snapshot changes require revalidation; a future checkout gate must compare the current snapshot hash with the report hash.
+Hash a fixed struct representation of the full INR snapshot with item rows sorted by `item_id`. The report includes the SHA-256 digest. Snapshot changes require revalidation. The in-process mock gate also binds the complete verification context; any future persistent or external checkout gate must independently revalidate the live cart.
 
 ## Scope evidence to the cart or item
 
 Requirements and evidence use explicit cart or item scope and subject IDs. Item evidence must match the cart item's product and variant. Cart total and promised delivery are derived from the snapshot, not caller evidence.
 
 The built-in `total_price_paise` requirement is cart-scoped with numeric expected values and numeric/equality operators, including strict and inclusive bounds. The built-in `delivery_date` requirement is cart-scoped with validated ISO date values and date/equality operators, including strict and inclusive bounds. Empty snapshots are rejected so a purchase report cannot return `ALLOW` for an empty cart.
+
+## Require mock evidence attestations at checkout
+
+The ordinary local verifier retains a legacy diagnostic mode for existing structured fixtures. The mock checkout gate is stricter: it injects its clock into a trusted-evidence policy and accepts product evidence only when a configured in-process mock provider HMAC-attested the exact evidence fields and canonical cart hash. Missing, unknown, invalid, stale, future-dated, or replayed evidence is excluded, producing `UNKNOWN` rather than a product `FAIL`. A trusted negative claim may still establish `FAIL`.
+
+The default checkout freshness window is 24 hours with a five-minute future tolerance. These are configurable when constructing the gate and are deterministic under an injected clock. The provider is a prototype trust boundary, not a real merchant identity, certificate system, or proof of claim truthfulness.
+
+## Bind multi-item requirements explicitly
+
+Single-item carts retain automatic product-level binding. Multi-item carts require explicit cart-context `item_bindings` from a unique product attribute to a concrete item ID. This lets evidence matching remain item/product/variant specific and avoids asking an LLM to choose cart items. Repeated attributes, unknown targets, and unqualified product requirements are ambiguous and produce `REVIEW`; cart-wide price and delivery constraints never use item bindings.
 
 ## Keep local evaluation separate from checkout
 

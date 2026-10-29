@@ -13,6 +13,7 @@
 *.pem
 *.key
 secrets.*
+*.checkpoint.jsonl
 
 # Editor and OS files
 .DS_Store

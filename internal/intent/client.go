@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,9 +22,10 @@ const (
 )
 
 type Config struct {
-	APIKey  string
-	Model   string
-	BaseURL string
+	APIKey         string
+	Model          string
+	BaseURL        string
+	RepairAttempts int
 }
 
 func ConfigFromEnv() (Config, error) {
@@ -41,6 +43,13 @@ func ConfigFromEnv() (Config, error) {
 	if config.BaseURL == "" {
 		config.BaseURL = DefaultBaseURL
 	}
+	if configured := strings.TrimSpace(os.Getenv("BUYRIGHTAGENTS_LLM_REPAIR_ATTEMPTS")); configured != "" {
+		attempts, parseErr := strconv.Atoi(configured)
+		if parseErr != nil || attempts < 0 || attempts > 1 {
+			return Config{}, errors.New("BUYRIGHTAGENTS_LLM_REPAIR_ATTEMPTS must be 0 or 1")
+		}
+		config.RepairAttempts = attempts
+	}
 	if err := config.validate(); err != nil {
 		return Config{}, err
 	}
@@ -53,6 +62,9 @@ func (config Config) validate() error {
 	}
 	if strings.TrimSpace(config.Model) == "" {
 		return errors.New("LLM model identifier is required")
+	}
+	if config.RepairAttempts < 0 || config.RepairAttempts > 1 {
+		return errors.New("LLM repair attempts must be 0 or 1")
 	}
 	parsed, err := url.Parse(config.BaseURL)
 	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Scheme != "https" && parsed.Scheme != "http") {
@@ -111,6 +123,41 @@ type chatResponse struct {
 	} `json:"choices"`
 }
 
+// HTTPStatusError contains only safe response metadata. Response bodies and
+// request credentials are deliberately excluded.
+type HTTPStatusError struct {
+	StatusCode        int
+	RetryAfter        string
+	RemainingRequests string
+	ResetRequests     string
+	RemainingTokens   string
+	ResetTokens       string
+}
+
+func (failure *HTTPStatusError) Error() string {
+	message := fmt.Sprintf("LLM endpoint returned HTTP %d %s", failure.StatusCode, http.StatusText(failure.StatusCode))
+	metadata := make([]string, 0, 5)
+	if failure.RetryAfter != "" {
+		metadata = append(metadata, "Retry-After="+failure.RetryAfter)
+	}
+	if failure.RemainingRequests != "" {
+		metadata = append(metadata, "remaining-requests="+failure.RemainingRequests)
+	}
+	if failure.ResetRequests != "" {
+		metadata = append(metadata, "reset-requests="+failure.ResetRequests)
+	}
+	if failure.RemainingTokens != "" {
+		metadata = append(metadata, "remaining-tokens="+failure.RemainingTokens)
+	}
+	if failure.ResetTokens != "" {
+		metadata = append(metadata, "reset-tokens="+failure.ResetTokens)
+	}
+	if len(metadata) > 0 {
+		message += " (" + strings.Join(metadata, ", ") + ")"
+	}
+	return message
+}
+
 func (client *HTTPClient) Complete(ctx context.Context, system, user string) (string, error) {
 	requestBody := chatRequest{
 		Model:          client.config.Model,
@@ -136,7 +183,14 @@ func (client *HTTPClient) Complete(ctx context.Context, system, user string) (st
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
-		return "", fmt.Errorf("LLM endpoint returned HTTP %d %s", response.StatusCode, http.StatusText(response.StatusCode))
+		return "", &HTTPStatusError{
+			StatusCode:        response.StatusCode,
+			RetryAfter:        safeHeaderValue(response.Header.Get("Retry-After"), client.config.APIKey),
+			RemainingRequests: safeHeaderValue(response.Header.Get("x-ratelimit-remaining-requests"), client.config.APIKey),
+			ResetRequests:     safeHeaderValue(response.Header.Get("x-ratelimit-reset-requests"), client.config.APIKey),
+			RemainingTokens:   safeHeaderValue(response.Header.Get("x-ratelimit-remaining-tokens"), client.config.APIKey),
+			ResetTokens:       safeHeaderValue(response.Header.Get("x-ratelimit-reset-tokens"), client.config.APIKey),
+		}
 	}
 	body, err := io.ReadAll(io.LimitReader(response.Body, MaxResponseBytes+1))
 	if err != nil {
@@ -153,4 +207,20 @@ func (client *HTTPClient) Complete(ctx context.Context, system, user string) (st
 		return "", errors.New("LLM response is missing message content")
 	}
 	return parsed.Choices[0].Message.Content, nil
+}
+
+func safeHeaderValue(value, secret string) string {
+	value = strings.TrimSpace(value)
+	if secret != "" {
+		value = strings.ReplaceAll(value, secret, "[REDACTED]")
+	}
+	if len(value) > 128 {
+		value = value[:128]
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return value
 }

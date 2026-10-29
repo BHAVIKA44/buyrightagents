@@ -15,12 +15,14 @@ import (
 )
 
 type Requirement struct {
-	ID         string                `json:"id"`
-	Attribute  string                `json:"attribute"`
-	Operator   verification.Operator `json:"operator"`
-	Expected   verification.Value    `json:"expected"`
-	Severity   verification.Severity `json:"severity"`
-	SourceText string                `json:"source_text"`
+	ID          string                `json:"id"`
+	Attribute   string                `json:"attribute"`
+	Operator    verification.Operator `json:"operator"`
+	Expected    verification.Value    `json:"expected"`
+	Severity    verification.Severity `json:"severity"`
+	SourceText  string                `json:"source_text"`
+	SourceStart int                   `json:"source_start,omitempty"`
+	SourceEnd   int                   `json:"source_end,omitempty"`
 }
 
 type ClarificationQuestion struct {
@@ -57,6 +59,7 @@ func attributeRegistry() map[string]attributeSpec {
 		verification.After: true, verification.AfterOrEqual: true,
 	}
 	return map[string]attributeSpec{
+		"product_category":  {verification.StringType, equality},
 		"vegan":             {verification.BooleanType, equality},
 		"water_resistant":   {verification.BooleanType, equality},
 		"recycled_material": {verification.BooleanType, equality},
@@ -95,8 +98,12 @@ func validateRequirement(requirement Requirement, request string) error {
 func validateExpected(attribute string, value verification.Value) error {
 	switch value.Type {
 	case verification.StringType:
-		if _, ok := value.Value.(string); !ok {
+		text, ok := value.Value.(string)
+		if !ok {
 			return fmt.Errorf("attribute %q expected value must be a string", attribute)
+		}
+		if attribute == "product_category" && normalizeCategory(text) == "" {
+			return fmt.Errorf("product_category must not be empty")
 		}
 	case verification.BooleanType:
 		if _, ok := value.Value.(bool); !ok {
@@ -128,6 +135,10 @@ func validateExpected(attribute string, value verification.Value) error {
 		return fmt.Errorf("attribute %q has unsupported value type %q", attribute, value.Type)
 	}
 	return nil
+}
+
+func normalizeCategory(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
 }
 
 func numberRat(value any) (*big.Rat, bool) {
