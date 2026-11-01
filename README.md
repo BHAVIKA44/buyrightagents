@@ -8,7 +8,15 @@ BuyRightAgents is a Go prototype for placing an independent verification boundar
 
 > **An agent may propose a cart; only evidence bound to that cart may authorize it.**
 
-This is an independent prototype, not a Razorpay product. It uses synthetic carts, a mock evidence provider, and an in-memory mock checkout gate. It does not contact merchants, execute payments, or authenticate real seller claims.
+This independent prototype uses synthetic carts, a mock evidence provider, and an in-memory mock checkout gate. It does not contact merchants, execute payments, or authenticate real seller claims.
+
+## Why this matters now
+
+The authorization rails for delegated commerce are becoming more concrete. For example, [NPCI's UPI Circle](https://www.npci.org.in/product/upi-circle) describes delegated payment authority with transaction limits and notes that AI/software-driven IoT payments are being piloted with a limited user group. That is a useful step toward answering **who may initiate a payment** and **within what monetary limit**.
+
+It does not, by itself, answer the shopping question that comes earlier: **does this exact proposed cart still satisfy what the user asked for?** A delegated limit cannot tell whether the selected backpack is vegan, fits a 16-inch laptop, costs less than a strict threshold after delivery, or violates a negative constraint. A shopping agent can stay within its budget and still buy the wrong product.
+
+BuyRightAgents explores that missing semantic-verification layer. It is not affiliated with NPCI or UPI, does not integrate with either, and does not claim to represent their current capabilities.
 
 ## The boundary this project explores
 
