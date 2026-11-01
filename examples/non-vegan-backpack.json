@@ -1,0 +1,43 @@
+{
+  "cart_snapshot": {
+    "cart_id": "cart-non-vegan-001",
+    "currency": "INR",
+    "captured_at": "2026-10-28T10:05:00Z",
+    "items": [
+      {
+        "item_id": "backpack-001",
+        "product_id": "fictional-product-002",
+        "variant_id": "fictional-variant-black",
+        "quantity": 1,
+        "unit_price_paise": 450000
+      }
+    ],
+    "shipping_paise": 25000,
+    "discount_paise": 0,
+    "delivery_date": "2026-10-29"
+  },
+  "requirements": [
+    {
+      "id": "vegan-material",
+      "attribute": "vegan",
+      "scope": "item",
+      "subject_id": "backpack-001",
+      "operator": "equals",
+      "expected": {"type": "boolean", "value": true},
+      "severity": "hard"
+    }
+  ],
+  "evidence": [
+    {
+      "id": "catalogue-non-vegan-claim",
+      "attribute": "vegan",
+      "scope": "item",
+      "subject_id": "backpack-001",
+      "product_id": "fictional-product-002",
+      "variant_id": "fictional-variant-black",
+      "value": {"type": "boolean", "value": false},
+      "source_id": "fictional-catalogue:backpack-001",
+      "observed_at": "2026-10-28T10:00:00Z"
+    }
+  ]
+}

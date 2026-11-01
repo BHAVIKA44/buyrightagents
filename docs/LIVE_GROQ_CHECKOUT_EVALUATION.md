@@ -1,5 +1,11 @@
 # Saved Groq Checkout Evaluation
 
+## Reproducibility and scope
+
+This is a historical, offline replay of saved model output. It makes no LLM calls, but it requires the separately retained private checkpoint named below. That checkpoint is intentionally ignored by Git because it is a local evaluation artifact; a fresh clone cannot run this replay without an authorized copy. `make saved-groq-checkout-eval` therefore fails with a clear message when the artifact is absent. All normal build, unit-test, deterministic-evaluation, and adversarial-evaluation commands work from a fresh clone without it.
+
+The checked-in manifest and generated report are safe summaries, not a substitute for the private checkpoint. Results describe synthetic carts, HMAC-attested mock evidence, and mock checkout only—not merchant evidence or payments.
+
 Offline replay of `reports/live-groq-gpt-oss-120b-v2-2026-10-29.checkpoint.jsonl` using `reports/live-groq-gpt-oss-120b-v2-2026-10-29.manifest.json`; no LLM calls are made.
 
 | Metric | Value |
@@ -9,7 +15,7 @@ Offline replay of `reports/live-groq-gpt-oss-120b-v2-2026-10-29.checkpoint.jsonl
 | Invalid safely rejected | 2 |
 | Checkout scenarios | 60 |
 | Unauthorized mock checkouts | 0 |
-| Compliant refusals | 3 |
+| Compliant refusals | 0 |
 | Not evaluated | 18 |
 
 ## Per-case outcomes

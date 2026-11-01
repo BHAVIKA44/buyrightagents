@@ -1,180 +1,121 @@
 # BuyRightAgents
 
-BuyRightAgents is an independent prototype exploring whether payment infrastructure could independently verify that a proposed agentic purchase satisfies the user's original requirements before checkout proceeds.
+BuyRightAgents is a Go CLI prototype for an important agentic-commerce question: before an AI agent proceeds with a purchase, can an independent system check the proposed cart against the user's original request?
 
-For example, given a request for a vegan backpack that fits a 16-inch laptop, costs less than ₹5,000 including delivery, and arrives before Friday, the intent interpreter can normalize the request. The deterministic verifier then accepts structured requirements and caller-supplied evidence against a specific cart snapshot, reporting `PASS`, `FAIL`, or `UNKNOWN` for each requirement. Hard violations block the local decision; unresolved hard requirements require review. Any cart change requires revalidation.
+It is an independent prototype, not a Razorpay product. It does not execute a payment, contact a merchant, or authenticate a live seller claim.
 
-An LLM may help interpret requirements, but it must not approve its own purchase. This is an independent prototype exploring a proposed capability. It does not claim Razorpay currently provides this exact feature or that no other company is working on it.
+## What it does
 
-## Status
+```text
+user request
+  -> untrusted LLM intent interpretation
+  -> validated typed requirements
+  -> cart snapshot + typed evidence
+  -> deterministic PASS / FAIL / UNKNOWN verification
+  -> ALLOW / BLOCK / REVIEW
+  -> optional, in-memory mock checkout gate
+```
 
-Implemented: a Go CLI, an LLM-backed natural-language intent interpreter, a deterministic verifier for structured requirements, typed evidence, and validated INR cart snapshots, and a deliberately in-memory mock checkout gate. The interpreter outputs requirements, clarification questions, and unsupported constraints; only deterministic code reports `PASS`, `FAIL`, or `UNKNOWN`, applies the `ALLOW`, `BLOCK`, or `REVIEW` policy, and may issue a mock checkout approval.
+The language model may extract requirements, but it never evaluates evidence, chooses a purchase decision, or authorizes checkout. A deterministic verifier evaluates hard constraints and preferences against a concrete cart. A hard `FAIL` produces `BLOCK`; unresolved hard evidence produces `REVIEW`; `ALLOW` requires all applicable hard requirements to pass.
 
-Grounded source text proves that an extracted requirement came from the request; by itself it cannot prove that the model extracted every requirement. As a narrow additional safeguard, the interpreter deterministically checks unquoted, non-preference mentions of the supported `vegan` and `water_resistant` boolean attributes. A matching hard requirement with the correct boolean value must be present, or the model must surface the phrase as unsupported or request clarification; otherwise interpretation fails and `check` returns `REVIEW`. This does not solve arbitrary natural-language completeness: it deliberately does not infer categories, numeric constraints, dates, quoted text, or contextual mentions. Omitted constraints outside this narrow guard remain a false-`ALLOW` risk until they are independently covered.
+## Trust boundaries
 
-Every report includes a SHA-256 hash of a canonical snapshot representation. It covers cart identity, currency, capture time, item identities and product/variant IDs, quantities, unit prices, shipping, discount, and promised delivery date. Items are sorted by stable `item_id` before hashing, so equivalent item orderings have the same hash. The mock checkout gate separately hashes a canonical purchase context containing the original request, normalized requirements, cart, evidence and provenance, reference time, decision, and gate policy version. Any change requires fresh approval.
+- **Intent:** Groq or another OpenAI-compatible endpoint is used only by the optional interpreter. Its structured output is validated and grounded in the original request.
+- **Evidence:** Product claims are separate from requirements. Item evidence is scoped to a cart item, product, and variant; cart price and delivery facts are derived from the snapshot.
+- **Cart binding:** Reports include a canonical SHA-256 cart-snapshot hash. Changing the cart requires revalidation.
+- **Mock checkout:** The optional in-memory gate accepts only HMAC-attested mock evidence, binds the request, requirements, cart, evidence, reference time, and policy version, and consumes an approval once. Tampering, replay, stale claims, and changed carts are rejected.
 
-Requirements and evidence identify either the cart or a specific cart item. Item evidence must name the matching product and variant in the snapshot. In a multi-item cart, every product-level requirement must have an explicit `item_bindings` entry identifying its target item; an unqualified product requirement becomes `REVIEW` rather than being applied to an arbitrary item. Cart-wide total price and delivery requirements continue to cover the entire cart. The verifier derives total price and promised delivery evidence from the local snapshot; caller evidence cannot override those cart-level facts.
+`ALLOW` is a local verification result. It is never payment permission.
 
-The hash binds the report to the supplied local snapshot; it does not authenticate that snapshot against a merchant's live cart or prove seller claims such as material or laptop fit. The mock checkout path additionally requires each caller-supplied product claim to carry an HMAC attestation from a configured mock provider. The attestation binds provider identity, evidence value and provenance, product/variant/item identity, and the canonical cart hash. The gate rejects missing, unknown, tampered, replayed, stale (older than 24 hours), and future-dated (more than 5 minutes) attestations by treating them as unusable evidence. Those defaults are configurable in code and evaluated against the gate's injected clock. This demonstrates integrity and freshness boundaries only; it does not prove a real merchant supplied truthful data.
+## Requirements and evidence
 
-Not implemented: shopping agent, MCP server, real merchant evidence retrieval/authentication, database, persistent or distributed checkout authorization, merchant integration, and payment integration.
+Requirements are typed and independently evaluated as `PASS`, `FAIL`, or `UNKNOWN`.
 
-## Verify requirements
+- Hard requirements decide `ALLOW`, `BLOCK`, or `REVIEW`.
+- Preferences are reported but do not independently block a compliant cart.
+- Missing, conflicting, untrusted, or wrongly scoped evidence fails closed to `UNKNOWN`/`REVIEW`.
+- The prototype supports typed category, boolean, string, numeric, price, delivery-date, material, colour, laptop-fit, and weight requirements. Explicit `backpack, not a tote` exclusions are represented as a separate category `not_equals` requirement when unambiguous.
 
-Provide a JSON file containing `cart_snapshot`, `requirements`, and `evidence`, then run:
+Grounded text and narrow coverage checks reduce some extraction failures, but they do not prove complete interpretation of arbitrary natural language. Language-model omissions outside recognized checks remain possible.
+
+## Install and run
+
+Prerequisite: Go 1.22 or newer. The module uses only the Go standard library.
+
+```sh
+git clone https://github.com/BHAVIKA44/buyrightagents.git
+cd buyrightagents
+go run ./cmd/buyrightagents help
+go run ./cmd/buyrightagents version
+```
+
+### Deterministic positive example
+
+This needs no API key or network access:
 
 ```sh
 go run ./cmd/buyrightagents verify examples/vegan-backpack.json
 ```
 
-The included fictional backpack example evaluates to `ALLOW`. Its item costs ₹4,500 plus ₹250 delivery, for ₹4,750 total. Seller claims and cart facts are illustrative only and do not describe a real product or live merchant cart. INR amounts use paise (`475000` is ₹4,750). Typed values use an explicit object such as `{"type":"number","value":500000}`. Unknown JSON fields and duplicate object keys are rejected.
+The fictional cart totals ₹4,750 and produces `ALLOW` for vegan material, a 16-inch laptop fit, total price, and delivery deadline.
 
-## Offline adversarial evaluation
-
-The manually labelled synthetic corpus in `evals/cases.jsonl` contains 67 independent scenarios across baseline, hard failures, total price, delivery, missing/contradictory evidence, item scoping, preferences, and mixed requirements. Run it with:
+### Deterministic negative example
 
 ```sh
-go run ./cmd/buyrightagents eval evals/cases.jsonl
-make eval
+go run ./cmd/buyrightagents verify examples/non-vegan-backpack.json
 ```
 
-The runner checks each decision and requirement outcome against its authored label, reports accuracy and safety-related rates with denominators, and exits nonzero for invalid cases or mismatches. See [`docs/EVALUATION.md`](docs/EVALUATION.md) for the format, metric definitions, and limitations. This suite measures agreement on synthetic cases; it does not establish real-world purchase correctness or authenticate seller claims.
+Its hard vegan requirement has evidence of `false`, so it produces `BLOCK`.
 
-`evals/adversarial-cases.jsonl` is a separate, version-controlled 109-scenario offline adversarial corpus. It uses deterministic model fixtures but runs the real intent parser and validator, evidence policy, verifier, mock approval gate, and checkout boundary. It also replays compatible saved structured-intent checkpoint results read-only. Run it with:
+### Optional remote interpretation
 
-```sh
-make adversarial-eval
-# or:
-go run ./cmd/buyrightagents adversarial-eval \
-  --dataset evals/adversarial-cases.jsonl \
-  --json reports/adversarial-results.json \
-  --report docs/ADVERSARIAL_EVALUATION.md
-```
-
-The runner intentionally writes mismatches to the report instead of treating them as a successful security score. Fixture behavior exercises the product pipeline, not live-model extraction reliability. The generated report separates observed deterministic boundary results from unresolved model-omission risks; neither a passing corpus nor zero observed failures would establish zero risk.
-
-## Local setup
-
-Install Go 1.22 or newer, then run:
-
-```sh
-go run ./cmd/buyrightagents help
-go run ./cmd/buyrightagents version
-go test ./...
-go vet ./...
-```
-
-The project uses only the Go standard library.
-
-## Interpret a request
-
-Natural-language interpretation calls a configured remote OpenAI-compatible Chat Completions API. It requires an explicit reference timestamp and never chooses the machine's current date implicitly:
+Only this command family calls a configured remote model:
 
 ```sh
 export BUYRIGHTAGENTS_LLM_API_KEY="..."
-export BUYRIGHTAGENTS_LLM_MODEL="your-model-id"
-# Optional; defaults to https://api.openai.com/v1
-export BUYRIGHTAGENTS_LLM_BASE_URL="https://api.openai.com/v1"
-go run ./cmd/buyrightagents interpret --reference-time "2026-10-28T16:48:00+05:30" "Find a vegan bag under ₹5,000 and ideally red."
+export BUYRIGHTAGENTS_LLM_BASE_URL="https://api.groq.com/openai/v1"
+export BUYRIGHTAGENTS_LLM_MODEL="openai/gpt-oss-120b"
+
+go run ./cmd/buyrightagents interpret \
+  --reference-time "2026-10-28T16:48:00+05:30" \
+  "Find a vegan bag under ₹5,000 and ideally red."
 ```
 
-The interpreter has no cart or evidence inputs and cannot return a purchase decision. Its output is an untrusted interpretation for later use. Evidence gathering, deterministic verification against a specific cart snapshot, and the mock checkout gate remain separate steps. Any persistent or external checkout authorization is future work. API keys must be supplied through the environment and must never be committed.
+Never commit or print an API key. The returned intent is not a purchase decision.
 
-## End-to-end purchase check demo
+`check` composes remote interpretation with a supplied synthetic cart/evidence file. `mock-checkout` additionally needs provider-issued HMAC attestations; no signed cart fixture is checked in because the provider credential must remain private. Its full authorization and tamper/replay behavior is reproducible offline through the integration tests below.
 
-The `check` command composes the configured remote interpreter with the local deterministic verifier. It accepts a natural-language request and a supplied cart/evidence JSON file, plus an explicit RFC3339 reference timestamp:
+## Offline validation
 
 ```sh
-go run ./cmd/buyrightagents check \
-  --reference-time "2026-10-28T10:00:00Z" \
-  --cart examples/demo-cart.json \
-  "Find a vegan bag under ₹5,000"
+go test -count=1 ./...
+go test -race -count=1 ./...
+go vet ./...
+go build ./...
+make eval
+make adversarial-eval
 ```
 
-The JSON result is shaped like this (the actual output includes typed expected values and evidence assessments):
+- `make eval` runs the 67-case deterministic verifier corpus.
+- `make adversarial-eval` runs 109 deterministic adversarial scenarios through intent validation, evidence policy, verification, and the mock approval gate.
+- `go test ./...` includes mock-checkout authorization, changed-cart, replay, attestation, and tampering tests with fake model clients; it makes no remote calls.
 
-```json
-{
-  "decision": "ALLOW",
-  "cart_snapshot_sha256": "<snapshot checksum>",
-  "requirements": [
-    {"result": {"attribute": "product_category", "outcome": "PASS"}, "reason": "supplied evidence satisfies this requirement"},
-    {"result": {"attribute": "vegan", "outcome": "PASS"}, "reason": "supplied evidence satisfies this requirement"},
-    {"result": {"attribute": "total_price_paise", "outcome": "PASS"}, "reason": "supplied evidence satisfies this requirement"}
-  ]
-}
-```
+The historical saved-Groq checkout replay is intentionally **optional**. It requires a separately retained private checkpoint that is ignored by Git; see [docs/LIVE_GROQ_CHECKOUT_EVALUATION.md](docs/LIVE_GROQ_CHECKOUT_EVALUATION.md). A fresh clone can run every command above without it.
 
-The synthetic cart has a ₹4,500 item, ₹250 shipping, and illustrative catalogue evidence for its category and vegan claim. Product category, vegan status, and total price are separate requirements; the verifier derives the ₹4,750 cart total from the snapshot, while category satisfaction comes only from supplied typed evidence. Category labels use case and whitespace normalization only. A successful response includes the decision, interpreted intent, per-requirement `PASS`/`FAIL`/`UNKNOWN` outcomes and evidence provenance, review reasons, and the supplied snapshot's hash. Model ambiguity or invalid intent, unsupported requirements, missing evidence, or conflicting hard constraints result in `REVIEW`; a detected hard violation results in `BLOCK`. `check` does not invoke checkout.
+## Measured evaluation evidence
 
-## Mock checkout-control-plane demo
+The offline deterministic suite currently matches **67/67 decisions** and **88/88 requirement outcomes**. The adversarial suite executes **109/109** synthetic scenarios with zero observed unexpected `ALLOW` decisions or unauthorized mock checkouts. These are regression results, not proof of real-world safety.
 
-`mock-checkout` runs the same interpretation and deterministic verification path as `check`, then lets the in-memory gate issue and immediately consume one bound mock approval only when the final decision is `ALLOW`. Unlike `check`, it requires HMAC-attested product evidence from a configured trusted mock provider. It never contacts a merchant or payment provider.
+One controlled live Groq run used `openai/gpt-oss-120b` through `https://api.groq.com/openai/v1` across 18 frozen synthetic buyer cases. It made 36 successful provider calls (one buyer and one interpreter call per case). Fifteen cases reached `ALLOW` and authorized the mock checkout; three conservatively returned `REVIEW`. No genuine selected hard-requirement violation was established as authorized. One raw oracle count is a documented frozen-label discrepancy: a leather backpack satisfied the written request but was excluded by the frozen acceptable-SKU list. See [docs/LIVE_GROQ_E2E_EVALUATION.md](docs/LIVE_GROQ_E2E_EVALUATION.md).
 
-The provider identity and HMAC key are trusted process configuration, not cart data. This deliberately in-process symmetric-HMAC mock shares the key between the synthetic provider and gate; it must never be committed, printed, or supplied in cart JSON:
+This is a single frozen-corpus observation. It does not establish general model reliability, zero unsafe purchases, real merchant verification, or production readiness.
 
-```sh
-export BUYRIGHTAGENTS_MOCK_EVIDENCE_PROVIDER_ID="synthetic-catalogue"
-export BUYRIGHTAGENTS_MOCK_EVIDENCE_HMAC_KEY="<provider-held-secret-at-least-16-bytes>"
-```
+## Known limitations
 
-An evidence record accepted by `mock-checkout` has this additional shape, where the provider creates the signature over the complete record and cart hash:
+- Merchant data, evidence retrieval, seller identity, carts, checkout, and payment are mocked.
+- The evidence HMAC demonstrates a prototype trust boundary, not real merchant authenticity.
+- The model can return invalid, incomplete, unsupported, or ambiguous intent; BuyRightAgents fails closed to `REVIEW`, but cannot guarantee language understanding completeness.
+- The mock approval state is process-local and non-persistent.
+- There is no shopping agent, MCP server, database, real merchant integration, or payment integration.
 
-```json
-"attestation": {
-  "version": "mock-evidence-v1",
-  "provider_id": "synthetic-catalogue",
-  "cart_snapshot_sha256": "<canonical-cart-hash>",
-  "signature": "<provider-hmac>"
-}
-```
-
-The checked-in demo cart is deliberately unsigned, so it remains suitable for ordinary local `check` examples but cannot authorize mock checkout. The offline integration tests construct provider-issued fixtures without exposing any provider key.
-
-```sh
-go run ./cmd/buyrightagents mock-checkout \
-  --reference-time "2026-10-28T10:00:00Z" \
-  --cart /path/to/provider-attested-cart.json \
-  "Find a vegan bag under ₹5,000"
-```
-
-With a valid interpretation, the JSON output has `purchase_check.decision: "ALLOW"`, an approval reference and bound-context checksum, then `checkout.authorized: true` with a `CHECKOUT_SUCCEEDED` audit record. It deliberately omits the HMAC credential from JSON. The approval is valid only inside that command's in-memory gate and is consumed by the simulated checkout; it cannot authorize a payment or survive a process restart.
-
-The following simulates a price change after approval. It uses a fictional cart whose item price changed from ₹4,500 to ₹4,550, while still fitting the requested budget. The gate rejects it because the approved context no longer matches, so `checkout.authorized` is `false` and the audit outcome is `CHECKOUT_REJECTED`.
-
-```sh
-go run ./cmd/buyrightagents mock-checkout \
-  --reference-time "2026-10-28T10:00:00Z" \
-  --cart /path/to/provider-attested-cart.json \
-  --checkout-cart /path/to/provider-attested-price-changed-cart.json \
-  "Find a vegan bag under ₹5,000"
-```
-
-The mock authorization record binds the exact request, typed requirements, cart snapshot, evidence including provenance, reference time, composed decision, and gate policy version using canonical serialization. Gate state is synchronized so concurrent presentations of the same approval yield at most one simulated checkout success. Rejections do not consume an otherwise valid approval. The audit trail is an in-memory diagnostic slice, not an append-only or tamper-proof ledger.
-
-### Multi-item bindings
-
-For a cart with more than one item, add one explicit binding for each unique product-level attribute required by the request:
-
-```json
-"item_bindings": [
-  {"attribute": "vegan", "item_id": "item-a"},
-  {"attribute": "water_resistant", "item_id": "item-b"}
-]
-```
-
-Each attribute may appear in the interpreted requirements only once for this narrow mapping scheme. Unknown items, duplicate bindings, attempts to bind cart-wide attributes, or ambiguous repeated attributes result in `REVIEW`. This is explicit cart selection metadata, not natural-language product planning.
-
-The separately invoked `eval-intent` command sends the labelled intent corpus to the configured model and may incur API charges. It is not run by `go test`, `make eval`, or ordinary validation. The corpus contains static authored expectations; tests use fake clients and local mock servers. Every run requires a local checkpoint path; successful case results are appended and synced individually. If a request fails, resume with the same dataset, model, endpoint, and checkpoint to skip completed cases and continue:
-
-```sh
-go run ./cmd/buyrightagents eval-intent --checkpoint ./intent-eval.checkpoint.jsonl
-go run ./cmd/buyrightagents eval-intent --checkpoint ./intent-eval.checkpoint.jsonl --resume
-# Optional: change the 3-second default interval (0s disables pacing).
-go run ./cmd/buyrightagents eval-intent --checkpoint ./intent-eval.checkpoint.jsonl --resume --request-interval 5s
-# Select the corrected intent fixture version explicitly.
-go run ./cmd/buyrightagents eval-intent --dataset evals/intent-cases-v2.jsonl --checkpoint ./intent-eval-v2.checkpoint.jsonl
-```
-
-The checkpoint records the model and endpoint, a SHA-256 dataset identity, case IDs, valid structured outputs, and terminal invalid-response outcomes. Invalid outcomes store a bounded diagnostic rather than the raw response and are skipped on resume. The checkpoint never contains the API key. Checkpoints are tied to the exact selected dataset; use the same `--dataset` value when resuming. `evals/intent-cases.jsonl` preserves the original fixtures, while `evals/intent-cases-v2.jsonl` corrects four ambiguous severity labels to expect clarification. Summaries separate response validity, exact accuracy across all outcomes, and exact accuracy among valid responses. Incomplete runs report partial metrics only. A 429 is retried at most once only when a reliable reset delay is 30 seconds or less; longer, daily, or missing reset information stops the run with a resume command.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/EVALUATION.md](docs/EVALUATION.md), and [docs/PROBLEM.md](docs/PROBLEM.md) for design details and boundaries.

@@ -572,3 +572,39 @@ func TestInterpretRequiresClientAndRequest(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func TestExplicitNegativeCategoryInterpretation(t *testing.T) {
+	request := "I need a backpack, not a tote, under ₹5,000."
+	positive := `{"attribute":"product_category","operator":"equals","expected":{"type":"string","value":"backpack"},"severity":"hard","source_text":"backpack"}`
+	price := `{"attribute":"total_price_paise","operator":"less_than","expected":{"type":"number","value":500000},"severity":"hard","source_text":"under ₹5,000"}`
+	negative := `{"attribute":"product_category","operator":"not_equals","expected":{"type":"string","value":"tote"},"severity":"hard","source_text":"not a tote"}`
+	for _, tt := range []struct {
+		name, negative string
+		wantError      bool
+	}{
+		{"faithful", negative, false},
+		{"omitted", "", true},
+		{"wrong polarity", strings.Replace(negative, "not_equals", "equals", 1), true},
+		{"wrong category", strings.Replace(negative, `"value":"tote"`, `"value":"bag"`, 1), true},
+		{"wrong severity", strings.Replace(negative, `"severity":"hard"`, `"severity":"preference"`, 1), true},
+		{"ungrounded", strings.Replace(negative, `"source_text":"not a tote"`, `"source_text":"not a suitcase"`, 1), true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			requirements := positive + "," + price
+			if tt.negative != "" {
+				requirements += "," + tt.negative
+			}
+			output := `{"requirements":[` + requirements + `],"clarification_questions":[],"unsupported_constraints":[]}`
+			result, err := (Interpreter{Client: &fakeModel{content: output}}).Interpret(context.Background(), request, "2026-10-28T10:00:00Z")
+			if (err != nil) != tt.wantError {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if !tt.wantError {
+				r := result.Requirements[2]
+				if r.Operator != verification.NotEquals || r.SourceText != "not a tote" || request[r.SourceStart:r.SourceEnd] != r.SourceText || r.Severity != verification.Hard {
+					t.Fatalf("ungrounded or changed exclusion: %+v", r)
+				}
+			}
+		})
+	}
+}
