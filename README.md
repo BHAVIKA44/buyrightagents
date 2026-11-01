@@ -12,11 +12,13 @@ This independent prototype uses synthetic carts, a mock evidence provider, and a
 
 ## Why this matters now
 
-The authorization rails for delegated commerce are becoming more concrete. For example, [NPCI's UPI Circle](https://www.npci.org.in/product/upi-circle) describes delegated payment authority with transaction limits and notes that AI/software-driven IoT payments are being piloted with a limited user group. That is a useful step toward answering **who may initiate a payment** and **within what monetary limit**.
+The project began with a deliberately small question: **if an agent can spend within an approved limit, who checks whether it bought what the user actually meant?**
 
-It does not, by itself, answer the shopping question that comes earlier: **does this exact proposed cart still satisfy what the user asked for?** A delegated limit cannot tell whether the selected backpack is vegan, fits a 16-inch laptop, costs less than a strict threshold after delivery, or violates a negative constraint. A shopping agent can stay within its budget and still buy the wrong product.
+That question is becoming practical rather than hypothetical. [NPCI's November 2025 UPI Circle Full Delegation announcement](https://www.npci.org.in/uploads/NBSL_Press_release_BHIM_Goes_Live_with_UPI_Circle_Full_Delegation_Enabling_Authorised_UPI_Payments_within_set_limits_7b308e643d.pdf) describes a primary user authorising a trusted secondary user to transact within a **₹15,000 monthly limit**. An [October 2025 NPCI circular](https://www.npci.org.in/uploads/UPI_OC_No_201_B_FY_2025_26_Addendum_to_NPCI_UPI_2024_25_OC_201_Introduction_of_Io_T_devices_software_on_UPI_Circle_09ec83c893.pdf) extended the framework to software profiles including AI profiles, initially in a limited closed user group. Those are meaningful controls over **who may initiate a payment** and **within what monetary limit**.
 
-BuyRightAgents explores that missing semantic-verification layer. It is not affiliated with NPCI or UPI, does not integrate with either, and does not claim to represent their current capabilities.
+They do not answer the earlier shopping question: **does this exact cart still satisfy the user's request?** A delegated limit cannot tell whether a selected backpack is vegan, fits a 16-inch laptop, stays below a strict total after delivery, or violates a negative constraint. An agent can remain within budget and still buy the wrong product.
+
+BuyRightAgents explores that missing semantic-verification layer: a decision boundary that checks the proposed purchase against the original request before a checkout-like action is authorized.
 
 ## The boundary this project explores
 
