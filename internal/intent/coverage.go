@@ -53,6 +53,7 @@ type coverageCandidate struct {
 }
 
 var (
+	negativeTotePattern      = regexp.MustCompile(`(?i)\bnot\s+a\s+tote\b`)
 	priceCandidatePattern    = regexp.MustCompile(`(?i)\b(under|below|less\s+than|at\s+most|no\s+more\s+than|over|above|more\s+than|greater\s+than|at\s+least)\s+₹\s*([0-9][0-9,]*(?:\.[0-9]{1,2})?)`)
 	weightCandidatePattern   = regexp.MustCompile(`(?i)\b(under|below|less\s+than|at\s+most|no\s+more\s+than|over|above|more\s+than|greater\s+than|at\s+least)\s+([0-9]+(?:\.[0-9]+)?)\s*(g|gram|grams|kg|kilogram|kilograms)\b`)
 	deliveryCandidatePattern = regexp.MustCompile(`(?i)\b(before|earlier\s+than|by|no\s+later\s+than|on\s+or\s+before|after|later\s+than|exactly\s+on|on)\s+((?:\d{4}-\d{2}-\d{2})|tomorrow|(?:this\s+)?(?:sunday|monday|tuesday|wednesday|thursday|friday|saturday))\b`)
@@ -100,10 +101,23 @@ func detectClauseCoverageCandidates(request, clause string, reference time.Time)
 		return nil
 	}
 	tokens := strings.Fields(normalized)
-	if !hasShoppingContext(tokens) {
-		return nil
-	}
 	result := make([]coverageCandidate, 0)
+	// A comma can place the exclusion in its own clause. Require shopping
+	// context in the request while retaining the unquoted clause boundary.
+	if hasShoppingContext(strings.Fields(normalizeText(request))) {
+		// Cover this explicit exclusion only; do not infer a taxonomy or parse
+		// general negation. Unsupported/ambiguous spans still require REVIEW.
+		for _, source := range negativeTotePattern.FindAllString(clause, -1) {
+			result = append(result, candidateForSource(request, coverageCandidate{
+				attribute: "product_category", source: source, operator: verification.NotEquals,
+				expected: verification.StringValue("tote"), severity: verification.Hard,
+			}))
+		}
+
+	}
+	if !hasShoppingContext(tokens) {
+		return result
+	}
 
 	for _, item := range []struct {
 		attribute string

@@ -362,3 +362,55 @@ func TestMockCheckoutCommandRejectsInvalidArguments(t *testing.T) {
 		t.Fatalf("invalid arguments were accepted: code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
 	}
 }
+
+func TestNegativeCategoryMockCheckout(t *testing.T) {
+	request := "I need a backpack, not a tote, under ₹5,000."
+	response := `{"requirements":[{"attribute":"product_category","operator":"equals","expected":{"type":"string","value":"backpack"},"severity":"hard","source_text":"backpack"},{"attribute":"product_category","operator":"not_equals","expected":{"type":"string","value":"tote"},"severity":"hard","source_text":"not a tote"},{"attribute":"total_price_paise","operator":"less_than","expected":{"type":"number","value":500000},"severity":"hard","source_text":"under ₹5,000"}],"clarification_questions":[],"unsupported_constraints":[]}`
+	for _, tt := range []struct {
+		name, category string
+		want           verification.Decision
+	}{
+		{name: "backpack", category: "backpack", want: verification.Allow},
+		{name: "tote", category: "tote", want: verification.Block},
+		{name: "missing category", want: verification.Review},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cart := testCart(true, true, 199000, "")
+			records := make([]verification.Evidence, 0, len(*cart.Evidence))
+			for _, e := range *cart.Evidence {
+				if e.Attribute == "product_category" {
+					if tt.category == "" {
+						continue
+					}
+					e.Value = verification.StringValue(tt.category)
+				}
+				records = append(records, e)
+			}
+			cart.Evidence = &records
+			trusted, err := readCartEvidenceFile(writeCheckoutCart(t, cart))
+			if err != nil {
+				t.Fatal(err)
+			}
+			gate := testMockCheckoutGate(t)
+			policy := gate.EvidencePolicy()
+			check, err := evaluatePurchaseWithEvidencePolicy(context.Background(), testInterpreter(response), request, demoReferenceTime, trusted, &policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if check.Decision != tt.want {
+				t.Fatalf("check=%+v", check)
+			}
+			approval, issueErr := gate.Issue(checkoutContext(check, trusted))
+			if tt.want == verification.Allow {
+				if issueErr != nil {
+					t.Fatal(issueErr)
+				}
+				if result := gate.Checkout(approval, checkoutContext(check, trusted)); !result.Authorized {
+					t.Fatalf("checkout=%+v", result)
+				}
+			} else if issueErr == nil {
+				t.Fatal("non-ALLOW issued approval")
+			}
+		})
+	}
+}

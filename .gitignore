@@ -15,6 +15,14 @@
 secrets.*
 *.checkpoint.jsonl
 
+# Local live-evaluation outputs (checkpoints remain separately retained)
+reports/buyer-ablation-*.analysis.md
+reports/buyer-ablation-*.comparison.md
+reports/buyer-ablation-*.history-hashes.json
+reports/buyer-ablation-*.partial-audit.md
+reports/buyer-ablation-*.report.md
+reports/buyer-ablation-*.results.json
+
 # Editor and OS files
 .DS_Store
 .idea/

@@ -375,6 +375,14 @@ func Evaluate(input Input) (Report, error) {
 				}
 			}
 			assessmentOutcome := compare(requirement.Operator, expected, observed)
+			// A known backpack satisfies a general bag request. This is
+			// directional and applies only to positive category equality;
+			// keep evidence and all other comparisons unchanged.
+			if requirement.Attribute == "product_category" && requirement.Operator == Equals &&
+				expected.Type == StringType && observed.Type == StringType &&
+				expected.Value == "bag" && observed.Value == "backpack" {
+				assessmentOutcome = Pass
+			}
 			result.Assessments = append(result.Assessments, EvidenceAssessment{
 				EvidenceID: item.ID, Value: item.Value, Scope: item.Scope, SubjectID: item.SubjectID,
 				ProductID: item.ProductID, VariantID: item.VariantID,

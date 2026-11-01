@@ -623,3 +623,39 @@ func cloneInput(input Input) Input {
 		Evidence:     append([]Evidence(nil), input.Evidence...),
 	}
 }
+
+func TestDirectionalBackpackSatisfiesBag(t *testing.T) {
+	for _, tt := range []struct {
+		name, expected, observed string
+		missing, unrelated       bool
+		want                     Outcome
+		decision                 Decision
+	}{
+		{name: "backpack satisfies general bag", expected: "bag", observed: "backpack", want: Pass, decision: Allow},
+		{name: "normalization retained", expected: " Bag ", observed: " BACKPACK ", want: Pass, decision: Allow},
+		{name: "generic bag cannot satisfy backpack", expected: "backpack", observed: "bag", want: Fail, decision: Block},
+		{name: "tote cannot satisfy backpack", expected: "backpack", observed: "tote", want: Fail, decision: Block},
+		{name: "no extra taxonomy", expected: "bag", observed: "tote", want: Fail, decision: Block},
+		{name: "no fuzzy matching", expected: "bag", observed: "backpack-style", want: Fail, decision: Block},
+		{name: "missing category evidence", expected: "bag", missing: true, want: Unknown, decision: Review},
+		{name: "unrelated evidence cannot establish category", expected: "bag", observed: "backpack", unrelated: true, want: Unknown, decision: Review},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			in := Input{CartSnapshot: testSnapshot(), Requirements: []Requirement{req("r1", Hard, "product_category", Equals, StringValue(tt.expected))}}
+			if !tt.missing {
+				e := evidence("e1", "product_category", StringValue(tt.observed))
+				if tt.unrelated {
+					e.Attribute = "description"
+				}
+				in.Evidence = []Evidence{e}
+			}
+			report, err := Evaluate(in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if report.Decision != tt.decision || report.Results[0].Outcome != tt.want {
+				t.Fatalf("report=%+v", report)
+			}
+		})
+	}
+}

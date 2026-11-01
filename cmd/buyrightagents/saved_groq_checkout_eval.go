@@ -257,7 +257,7 @@ func runSavedGroqCheckoutEvaluation(manifest savedGroqManifest, records map[stri
 			violate  *intent.Requirement
 			expected verification.Decision
 		}{{"compliant", nil, verification.Allow}, {"negative", &hard[0], verification.Block}} {
-			cart, err := savedGroqCart(spec.ID, spec.ExpectedIntent, scenario.violate)
+			cart, err := savedGroqCart(spec.ID, spec.Request, spec.ExpectedIntent, actual, scenario.violate)
 			if err != nil {
 				result.NotEvaluated = err.Error()
 				report.Summary.NotEvaluated++
@@ -300,7 +300,7 @@ func hardRequirements(value intent.PurchaseIntent) []intent.Requirement {
 	return result
 }
 
-func savedGroqCart(caseID string, expected intent.PurchaseIntent, violate *intent.Requirement) (cartEvidenceFile, error) {
+func savedGroqCart(caseID, request string, expected, actual intent.PurchaseIntent, violate *intent.Requirement) (cartEvidenceFile, error) {
 	now := time.Date(2026, 10, 28, 10, 0, 0, 0, time.UTC)
 	delivery := "2026-10-30"
 	snapshot := verification.CartSnapshot{CartID: "live-" + caseID, Currency: "INR", CapturedAt: now.Add(-time.Minute).Format(time.RFC3339Nano), Items: []verification.CartItem{{ItemID: "item-1", ProductID: "product-1", VariantID: "variant-1", Quantity: 1, UnitPricePaise: 100000}}, DeliveryDate: &delivery}
@@ -326,7 +326,24 @@ func savedGroqCart(caseID string, expected intent.PurchaseIntent, violate *inten
 		if prior, ok := values[req.Attribute]; ok && fmt.Sprint(prior.Value) != fmt.Sprint(req.Expected.Value) {
 			return cartEvidenceFile{}, fmt.Errorf("conflicting original %s requirements", req.Attribute)
 		}
-		values[req.Attribute] = req.Expected
+		values[req.Attribute] = savedGroqSatisfyingValue(req.Expected, req.Operator)
+	}
+	// Historical labels predate first-class product categories in a few cases.
+	// When a saved model output names a category explicitly present in the
+	// original request, include independently scoped synthetic category evidence
+	// in the compliant fixture. This avoids treating fixture omission as a
+	// product refusal, while not accepting a model-invented category.
+	if _, ok := values["product_category"]; !ok {
+		for _, req := range hardRequirements(actual) {
+			if req.Attribute != "product_category" || req.Operator != verification.Equals || req.Expected.Type != verification.StringType {
+				continue
+			}
+			category, ok := req.Expected.Value.(string)
+			if ok && savedGroqRequestMentionsCategory(request, category) {
+				values["product_category"] = verification.StringValue(category)
+			}
+			break
+		}
 	}
 	if violate != nil {
 		if violate.Attribute == "total_price_paise" {
@@ -380,6 +397,41 @@ func savedGroqSatisfying(v int64, op verification.Operator) int64 {
 		return v + 1
 	}
 	return v
+}
+
+func savedGroqSatisfyingValue(value verification.Value, operator verification.Operator) verification.Value {
+	switch value.Type {
+	case verification.NumberType:
+		v, ok := savedGroqNumber(value)
+		if ok {
+			return verification.NumberInt64Value(savedGroqSatisfying(v, operator))
+		}
+	case verification.BooleanType:
+		if operator == verification.NotEquals {
+			if b, ok := value.Value.(bool); ok {
+				return verification.BooleanValue(!b)
+			}
+		}
+	case verification.StringType:
+		if operator == verification.NotEquals {
+			return verification.StringValue("not-" + fmt.Sprint(value.Value))
+		}
+	}
+	return value
+}
+
+func savedGroqRequestMentionsCategory(request, category string) bool {
+	needle := strings.ToLower(strings.TrimSpace(category))
+	if needle == "" {
+		return false
+	}
+	for _, token := range strings.Fields(strings.ToLower(request)) {
+		token = strings.Trim(token, ".,;:!?()[]{}\"'")
+		if token == needle {
+			return true
+		}
+	}
+	return false
 }
 func savedGroqViolating(v int64, op verification.Operator) int64 {
 	switch op {

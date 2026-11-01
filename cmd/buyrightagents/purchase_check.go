@@ -32,14 +32,15 @@ type itemRequirementBinding struct {
 }
 
 type PurchaseCheckResult struct {
-	Request            string                         `json:"request"`
-	ReferenceTime      string                         `json:"reference_time"`
-	Decision           verification.Decision          `json:"decision"`
-	CartSnapshotSHA256 string                         `json:"cart_snapshot_sha256"`
-	Intent             *intent.PurchaseIntent         `json:"intent,omitempty"`
-	Interpretation     *intent.InterpretationMetadata `json:"interpretation,omitempty"`
-	Requirements       []RequirementCheckResult       `json:"requirements"`
-	ReviewReasons      []string                       `json:"review_reasons"`
+	Request            string                                 `json:"request"`
+	ReferenceTime      string                                 `json:"reference_time"`
+	Decision           verification.Decision                  `json:"decision"`
+	CartSnapshotSHA256 string                                 `json:"cart_snapshot_sha256"`
+	Intent             *intent.PurchaseIntent                 `json:"intent,omitempty"`
+	Interpretation     *intent.InterpretationMetadata         `json:"interpretation,omitempty"`
+	Requirements       []RequirementCheckResult               `json:"requirements"`
+	EvidenceTrust      []verification.EvidenceTrustAssessment `json:"evidence_trust,omitempty"`
+	ReviewReasons      []string                               `json:"review_reasons"`
 }
 
 type RequirementCheckResult struct {
@@ -179,6 +180,7 @@ func evaluatePurchaseWithEvidencePolicy(ctx context.Context, interpreter intent.
 		return result, nil
 	}
 	result.CartSnapshotSHA256 = verified.CartSnapshotSHA256
+	result.EvidenceTrust = append([]verification.EvidenceTrustAssessment(nil), verified.EvidenceTrust...)
 	for _, item := range verified.Results {
 		result.Requirements = append(result.Requirements, RequirementCheckResult{Result: item, Reason: outcomeReason(item)})
 		if item.Outcome == verification.Unknown && item.Severity == verification.Hard {
