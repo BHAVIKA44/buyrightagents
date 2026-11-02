@@ -37,13 +37,38 @@ it cannot prove that the selected item is vegan, that evidence belongs to the
 selected variant, or that the delivery promise remains valid after the cart
 changes.
 
-That distinction is becoming concrete. [NPCI's November 2025 UPI Circle Full
-Delegation announcement](https://www.npci.org.in/uploads/NBSL_Press_release_BHIM_Goes_Live_with_UPI_Circle_Full_Delegation_Enabling_Authorised_UPI_Payments_within_set_limits_7b308e643d.pdf)
-describes a primary user authorising a trusted secondary user within a ₹15,000
-monthly limit. An [October 2025 NPCI circular](https://www.npci.org.in/uploads/UPI_OC_No_201_B_FY_2025_26_Addendum_to_NPCI_UPI_2024_25_OC_201_Introduction_of_Io_T_devices_software_on_UPI_Circle_09ec83c893.pdf)
-extends the framework to software profiles, including AI profiles, in a limited
-closed user group. Those mechanisms concern **who may initiate a payment** and
-**how much may be spent**. BuyRightAgents explores the separate question:
+## Complementing AP2 and UCP
+
+[AP2](https://github.com/google-agentic-commerce/AP2/blob/main/docs/ap2/specification.md)
+defines cryptographically verifiable checkout and payment mandates, including
+constraints that bind an agent-authorized transaction to user intent. The
+[Universal Commerce Protocol (UCP)](https://ucp.dev/specification/overview/)
+standardizes interoperable commerce interactions among platforms, businesses,
+and payment handlers. Both are important foundations—not systems this project
+tries to replace.
+
+BuyRightAgents explores a narrower, complementary question: **can an
+independent verifier establish that the available evidence supports the user's
+requirements for the exact cart and product variant proposed for checkout?**
+
+| Concern | AP2 / UCP role | What this prototype implements |
+| --- | --- | --- |
+| Agent identity | Protocol identity and authorization mechanisms | Not implemented. |
+| Permission to transact | AP2 mandates and payment authorization flows | Mock-only, one-time local gate; no payment credential. |
+| Natural-language intent | A shopping agent determines task details before mandate assembly | Optional untrusted LLM extraction with grounded validation. |
+| Product evidence and claim verification | Commerce participants expose interoperable capabilities and data | Synthetic, item/product/variant-scoped evidence only. |
+| Cart-bound checkout authorization | Checkout/payment binding and commerce flows | Canonical cart hash plus a mock, HMAC-attested evidence gate. |
+
+AP2 leaves task interpretation to the shopping agent and explicitly places
+commerce-protocol details such as catalogue APIs and checkout updates outside
+its scope. This prototype does not establish merchant truth; it makes the
+evidence, scope, and cart binding needed for a deterministic local decision
+visible and testable.
+
+The same distinction is relevant to delegated-payment initiatives such as
+[NPCI's UPI Circle Full Delegation announcement](https://www.npci.org.in/uploads/NBSL_Press_release_BHIM_Goes_Live_with_UPI_Circle_Full_Delegation_Enabling_Authorised_UPI_Payments_within_set_limits_7b308e643d.pdf),
+which describes authorization within a monetary limit. BuyRightAgents explores
+the separate question:
 
 > Does this exact proposed cart still satisfy the user's original request?
 
@@ -100,7 +125,9 @@ cd buyrightagents
 make demo
 ```
 
-`make demo` runs these real checked-in fixtures through `verify`:
+`make demo` evaluates these real checked-in fixtures through the same local
+verification package and formats the resulting reports. It checks each expected
+decision and exits nonzero if a fixture changes unexpectedly:
 
 | Scenario | User intent represented in the fixture | Evidence / cart fact | Actual deterministic result | Why it matters |
 | --- | --- | --- | --- | --- |
@@ -108,9 +135,9 @@ make demo
 | [BLOCK](examples/non-vegan-backpack.json) | vegan | selected item has accepted `vegan: false` evidence | `BLOCK` | A known hard violation cannot be paid through merely because the cart is otherwise plausible. |
 | [REVIEW](examples/missing-vegan-evidence.json) | vegan | no product evidence establishes the claim | `REVIEW` | Missing proof is not treated as a pass. |
 
-The CLI emits a full JSON report with the canonical cart hash, evidence
-provenance, and per-requirement outcomes. The important excerpts are produced by
-the commands above:
+The demo prints each cart total, actual decision, and the hard requirement that
+passed, failed, or remained unresolved. Full JSON reports—with the canonical
+cart hash, evidence provenance, and per-requirement outcomes—remain available:
 
 ```text
 # vegan-backpack.json
@@ -126,7 +153,13 @@ the commands above:
 The fixtures are synthetic and offline. They demonstrate the verifier's policy,
 not proof of a real catalogue claim. The regression test
 [`TestRunVerify`](cmd/buyrightagents/main_test.go) executes all three through the
-public CLI path.
+public CLI path; [`TestRunDemoUsesActualFixtureResults`](cmd/buyrightagents/main_test.go)
+checks the formatted path.
+
+`make demo` runs **verification only**. It does not interpret natural language,
+issue HMAC attestations, or attempt a mock checkout. The separate mock gate
+tests in [the proof guide](docs/PROOF.md) exercise cart mutation, stale or
+mismatched evidence, and one-time approval replay.
 
 ## The engineering choices
 
