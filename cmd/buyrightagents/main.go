@@ -49,6 +49,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 			return reportError(stderr, "input file path is required")
 		}
 		return verifyFile(args[1], stdout, stderr)
+	case "demo":
+		if len(args) != 1 {
+			return reportError(stderr, "demo does not accept arguments")
+		}
+		return demoCommand(stdout, stderr)
 	case "check":
 		return checkCommand(args[1:], stdout, stderr, nil)
 	case "mock-checkout":
@@ -349,7 +354,7 @@ func scanJSONValue(decoder *json.Decoder) error {
 
 func printHelp(writer io.Writer) {
 	fmt.Fprintln(writer, "BuyRightAgents: purchase requirement verification prototype")
-	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|check --reference-time <RFC3339> --cart <cart.json> <request text>|mock-checkout --reference-time <RFC3339> --cart <cart.json> [--checkout-cart <cart.json>] [--checkout-request <request>] <request text>|eval <cases.jsonl>|adversarial-eval --dataset <cases.jsonl> --json <results.json> --report <report.md>|saved-groq-checkout-eval --dataset <cases.jsonl> --checkpoint <saved.jsonl> --manifest <manifest.json> --json <results.json> --report <report.md> [--freeze-only]|interpret --reference-time <RFC3339> <request text>|eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]]")
+	fmt.Fprintln(writer, "Usage: buyrightagents [help|version|verify <input.json>|demo|check --reference-time <RFC3339> --cart <cart.json> <request text>|mock-checkout --reference-time <RFC3339> --cart <cart.json> [--checkout-cart <cart.json>] [--checkout-request <request>] <request text>|eval <cases.jsonl>|adversarial-eval --dataset <cases.jsonl> --json <results.json> --report <report.md>|saved-groq-checkout-eval --dataset <cases.jsonl> --checkpoint <saved.jsonl> --manifest <manifest.json> --json <results.json> --report <report.md> [--freeze-only]|interpret --reference-time <RFC3339> <request text>|eval-intent --checkpoint <path> [--resume] [--request-interval <duration>] [--dataset <path>]]")
 	fmt.Fprintln(writer, "Note: adversarial-eval is offline. Check, interpret, mock-checkout, and eval-intent contact the configured remote LLM; mock-checkout also requires configured mock-provider evidence attestations; eval-intent may incur API charges.")
 }
 
