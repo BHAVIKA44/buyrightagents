@@ -1,159 +1,180 @@
 # BuyRightAgents
 
-An agent can find a plausible product and still buy the wrong thing.
+**A semantic verification boundary for AI shopping agents.**
 
-“Vegan” can disappear from a summary. “Under ₹5,000” can become inclusive. A product claim can be attached to the wrong cart item. A checkout decision can outlive the cart it was supposed to approve. These are authorization problems, not merely retrieval problems.
-
-BuyRightAgents is a Go prototype for placing an independent verification boundary between a shopping agent's proposal and a checkout decision. It converts untrusted natural-language interpretation into typed requirements, evaluates those requirements against a concrete cart and evidence, and produces a deterministic `ALLOW`, `BLOCK`, or `REVIEW` result.
+An agent can stay within a spending limit and still buy the wrong thing. A ₹4,500
+leather backpack is within a ₹5,000 allowance—but it violates a request for a
+vegan backpack. BuyRightAgents is a Go CLI prototype that independently checks a
+proposed cart against the user's requirements before a **mock** checkout can be
+authorized.
 
 > **An agent may propose a cart; only evidence bound to that cart may authorize it.**
 
-This independent prototype uses synthetic carts, a mock evidence provider, and an in-memory mock checkout gate. It does not contact merchants, execute payments, or authenticate real seller claims.
+It implements an optional LLM intent interpreter, strict validation of its typed
+output, cart- and item-scoped evidence evaluation, deterministic `ALLOW` /
+`BLOCK` / `REVIEW` decisions, and a cart-bound, one-time mock checkout gate.
+The interpreter is never the authority that approves its own purchase.
 
-## Why this matters now
+This is an independent prototype. Carts, evidence, attestations, and checkout are
+synthetic; it does not contact merchants, authenticate seller claims, or execute
+payments.
 
-The project began with a deliberately small question: **if an agent can spend within an approved limit, who checks whether it bought what the user actually meant?**
+## In 15 seconds
 
-That question is becoming practical rather than hypothetical. [NPCI's November 2025 UPI Circle Full Delegation announcement](https://www.npci.org.in/uploads/NBSL_Press_release_BHIM_Goes_Live_with_UPI_Circle_Full_Delegation_Enabling_Authorised_UPI_Payments_within_set_limits_7b308e643d.pdf) describes a primary user authorising a trusted secondary user to transact within a **₹15,000 monthly limit**. An [October 2025 NPCI circular](https://www.npci.org.in/uploads/UPI_OC_No_201_B_FY_2025_26_Addendum_to_NPCI_UPI_2024_25_OC_201_Introduction_of_Io_T_devices_software_on_UPI_Circle_09ec83c893.pdf) extended the framework to software profiles including AI profiles, initially in a limited closed user group. Those are meaningful controls over **who may initiate a payment** and **within what monetary limit**.
+| Question | Answer |
+| --- | --- |
+| **What problem?** | Delegated payment permission does not establish that a selected cart satisfies the user's semantic constraints. |
+| **Why now?** | Agentic and delegated payment flows increase the need to distinguish “may spend” from “selected the right purchase.” |
+| **What is distinctive?** | An LLM may translate language into data; a deterministic verifier evaluates independently supplied, cart-bound evidence. |
+| **What actually runs?** | A Go CLI, strict typed schemas, canonical cart hashing, HMAC-attested *mock* evidence, an in-memory mock gate, and offline evaluation suites. |
 
-They do not answer the earlier shopping question: **does this exact cart still satisfy the user's request?** A delegated limit cannot tell whether a selected backpack is vegan, fits a 16-inch laptop, stays below a strict total after delivery, or violates a negative constraint. An agent can remain within budget and still buy the wrong product.
+## The gap: permission is not purchase correctness
 
-BuyRightAgents explores that missing semantic-verification layer: a decision boundary that checks the proposed purchase against the original request before a checkout-like action is authorized.
+Imagine a user asks for a **vegan backpack that fits a 16-inch laptop, costs less
+than ₹5,000 including delivery, and arrives before Friday**. A shopping agent
+proposes a cart. A spending cap can decide whether the charge is within budget;
+it cannot prove that the selected item is vegan, that evidence belongs to the
+selected variant, or that the delivery promise remains valid after the cart
+changes.
 
-## The boundary this project explores
+That distinction is becoming concrete. [NPCI's November 2025 UPI Circle Full
+Delegation announcement](https://www.npci.org.in/uploads/NBSL_Press_release_BHIM_Goes_Live_with_UPI_Circle_Full_Delegation_Enabling_Authorised_UPI_Payments_within_set_limits_7b308e643d.pdf)
+describes a primary user authorising a trusted secondary user within a ₹15,000
+monthly limit. An [October 2025 NPCI circular](https://www.npci.org.in/uploads/UPI_OC_No_201_B_FY_2025_26_Addendum_to_NPCI_UPI_2024_25_OC_201_Introduction_of_Io_T_devices_software_on_UPI_Circle_09ec83c893.pdf)
+extends the framework to software profiles, including AI profiles, in a limited
+closed user group. Those mechanisms concern **who may initiate a payment** and
+**how much may be spent**. BuyRightAgents explores the separate question:
 
-An LLM is useful for translating a request such as “find a vegan backpack under ₹5,000” into a structured representation. It is not a safe authority for deciding that its own proposed purchase satisfies that request. BuyRightAgents keeps those responsibilities separate:
+> Does this exact proposed cart still satisfy the user's original request?
 
-```text
-  ORIGINAL USER REQUEST                         untrusted language
-             |
-             v
-  OPENAI-COMPATIBLE LLM INTERPRETER             extracts typed intent only
-             |
-             v
-  GROUNDING + COVERAGE VALIDATION               rejects invalid / recognized omissions
-             |
-             v
-  TYPED REQUIREMENTS                            no cart, evidence, or decision fields
-             |
-             +-------------------+
-             |                   |
-             v                   v
-  CART SNAPSHOT           MOCK-ATTESTED EVIDENCE
-  (price + delivery)      (item/product/variant scoped)
-             \                   /
-              v                 v
-       DETERMINISTIC REQUIREMENT EVALUATOR      PASS / FAIL / UNKNOWN
-                         |
-                         v
-                 ALLOW / BLOCK / REVIEW
-                         |
-                         v
-          CART-BOUND, ONE-TIME MOCK CHECKOUT GATE
+That matters for user trust, unwanted purchases, returns and disputes, and the
+safe adoption of autonomous buying flows. Those are potential product impacts,
+not results measured by this repository.
+
+## What runs and where trust stops
+
+```mermaid
+flowchart LR
+    U["User instruction\n(untrusted natural language)"] --> I
+    subgraph M["Untrusted model boundary"]
+      I["Optional OpenAI-compatible\nintent interpreter"]
+    end
+    I --> G["Grounding + narrow coverage validation"]
+    G --> R["Typed requirements\nno cart, evidence, or decision fields"]
+
+    C["Synthetic cart snapshot\ncanonical SHA-256 hash"] --> V
+    E["Synthetic product evidence\nitem / product / variant scoped"] --> A
+    A["In-process mock-provider\nHMAC attestation + freshness"] --> V
+    R --> V["Deterministic verifier\nPASS / FAIL / UNKNOWN"]
+    V --> D{"Composed policy"}
+    D -->|all hard PASS| L["ALLOW"]
+    D -->|confirmed hard FAIL| B["BLOCK"]
+    D -->|unknown / unsupported / ambiguous| Q["REVIEW"]
+    L --> GATE["Cart-bound, one-time\nmock checkout gate"]
+
+    classDef untrusted fill:#fff4e5,stroke:#b35c00,color:#222;
+    classDef deterministic fill:#e9f5ff,stroke:#0969da,color:#222;
+    classDef mock fill:#f3e8ff,stroke:#8250df,color:#222;
+    class I,U untrusted;
+    class G,R,V,D,L,B,Q deterministic;
+    class C,E,A,GATE mock;
 ```
 
-The LLM never receives a checkout-authority field. Its output is strict-decoded as untrusted data and checked against grounded source text from the original request. The verifier—not the model—evaluates evidence and determines the decision.
+The model output is strict-decoded as untrusted data. It cannot supply a cart,
+evidence, a decision, or checkout authority. The verifier evaluates typed
+requirements only after validation; the mock gate independently re-evaluates a
+fully bound context. A hash binds a report to a supplied snapshot, while the
+mock attestation binds synthetic evidence to that snapshot. Neither proves a
+real merchant's claim or live cart.
 
-Grounding helps prevent invented constraints, and narrow coverage checks catch selected recognizable omissions. Neither proves arbitrary language was interpreted completely. If the system cannot establish a hard requirement, it returns `REVIEW`.
+For a code-level map, see [Architecture](docs/ARCHITECTURE.md) and the
+[proof guide](docs/PROOF.md).
 
-## A concrete verification path
+## Try the verifier in 60 seconds—no key or network needed
 
-The checked-in [deterministic ALLOW fixture](examples/vegan-backpack.json) demonstrates the evidence and policy path offline. It represents a synthetic cart for a request with these hard constraints:
-
-| Requirement | Typed comparison | Evidence source | Outcome |
-| --- | --- | --- | --- |
-| Vegan material | item `vegan == true` | product evidence scoped to the selected item, product, and variant | `PASS` |
-| Laptop fit | item `laptop_fit_inches >= 16` | product evidence scoped to that same item | `PASS` |
-| Total cost | cart `total_price_paise <= 500000` | derived from item price, shipping, and discount in the cart | `PASS` |
-| Delivery deadline | cart `delivery_date <= 2026-10-30` | derived from the cart's promised delivery date | `PASS` |
-
-The cart total is ₹4,750 including delivery, so the local verifier returns `ALLOW`. The sentence “vegan backpack” is illustrative of the product scenario; this particular fixture intentionally demonstrates the four typed checks above rather than a recorded LLM transcript.
-
-Three outcomes keep the decision rule legible:
-
-| Decision | Meaning |
-| --- | --- |
-| `ALLOW` | Every applicable hard requirement passed with accepted evidence. |
-| `BLOCK` | At least one independently established hard requirement failed. |
-| `REVIEW` | A hard requirement is unresolved, the intent is ambiguous/invalid, or a constraint is unsupported. |
-
-A preference can be reported as unsatisfied without independently blocking a cart. A confirmed hard failure takes precedence over unrelated unknowns; it cannot be silently downgraded to `REVIEW`.
-
-## Engineering decisions that matter
-
-### 1. LLM output is data, not authority
-
-The [intent schema](internal/intent/types.go) admits requirements, clarifications, and unsupported constraints—not a cart, evidence, payment, or purchase decision. [Interpreter validation](internal/intent/interpreter.go) rejects malformed, duplicate, unknown, and unsupported output before it can influence verification. Confidence is not evidence.
-
-### 2. A price claim is not a cart total
-
-`total_price_paise` and `delivery_date` are cart-scoped attributes in the [verifier](internal/verification/verification.go). Their evidence comes from the validated snapshot; product evidence cannot override them. Numeric comparisons are exact and distinguish strict from inclusive operators. An empty cart can never produce `ALLOW`.
-
-### 3. Evidence belongs to an item, not a description
-
-Item evidence must match the selected cart item's ID, product ID, and variant ID. This prevents a true claim about one product approving another. Multi-item product requirements need explicit bindings; missing or ambiguous bindings return `REVIEW`. See the [verifier](internal/verification/verification.go) and [purchase-check tests](cmd/buyrightagents/purchase_check_test.go).
-
-### 4. Integrity needs a concrete object to bind
-
-Every report includes a canonical SHA-256 cart hash. The mock checkout path accepts product evidence only when its identity, value, provenance, item binding, and cart hash have an in-process HMAC attestation. The gate re-evaluates the bound context with its own clock and issues a one-time approval only for `ALLOW`. See [mock evidence](internal/evidence/mock_provider.go) and the [checkout gate](internal/checkout/control.go).
-
-This is intentionally a prototype trust boundary—not a merchant identity system. It demonstrates what must be bound and rechecked; it does not prove that a real seller claim is true.
-
-### 5. Missing meaning is a safety result, not a default
-
-The [coverage validator](internal/intent/coverage.go) catches a defined set of recognizable required concepts—price, delivery, material, laptop fit, category, and selected boolean claims—when model output omits or changes them. It also preserves grounded hard-versus-preference signals. This reduces known omission paths without claiming natural-language completeness.
-
-### 6. Category matching stays intentionally small
-
-The implementation supports typed categories and the unambiguous negative phrase `backpack, not a tote`. It does not claim a general taxonomy or fuzzy matching. Its only directional compatibility rule is that observed `backpack` may satisfy requested `bag`; the inverse is not assumed.
-
-## What broke, and what it taught us
-
-The project records unfavorable results as engineering evidence rather than smoothing them into a headline metric.
-
-| What failed | Root cause and response | What remains unresolved |
-| --- | --- | --- |
-| Recognized hard constraints could be omitted by model output. | Coverage validation now rejects recognized omissions or polarity/operator changes instead of letting them fall through to approval. | The guard is not a complete natural-language understanding system. Unrecognized omissions remain possible. |
-| A frozen live-E2E oracle classified one selected leather backpack as unacceptable even though it satisfied the written constraints. | The acceptable-SKU list, not the verified request semantics, caused the discrepancy. The frozen data and raw count were retained and documented. | Synthetic oracle design still requires independent review. |
-| Three cases in the controlled live run did not reach authorization. | Two interpretations failed validation and one included an unsupported constraint, so the system returned `REVIEW`. | This is a usability cost of failing closed; it is not evidence that the model understands every request. |
-
-The result is not “the model is reliable.” It is that known uncertainty and validation failures do not receive mock authorization.
-
-## Evaluation evidence
-
-The numbers below measure different things and should not be combined into a single success rate.
-
-| Evaluation | What it measures | Result | What it does **not** establish |
-| --- | --- | --- | --- |
-| [Deterministic verifier corpus](docs/EVALUATION.md) | Agreement with synthetic verifier labels | **67/67** decisions; **88/88** requirement outcomes | Seller truth, live-cart integrity, or general safety |
-| [Adversarial regression corpus](docs/ADVERSARIAL_EVALUATION.md) | Fixed malformed/malicious fixtures through the full mock path | **109/109** executed; **0** unexpected `ALLOW`; **0** unauthorized mock checkouts | Independent live-model attacks or zero risk outside this corpus |
-| [Controlled live Groq E2E run](docs/LIVE_GROQ_E2E_EVALUATION.md) | One buyer-selection + interpreter path with synthetic evidence | **18/18** cases; **36** calls; **15** `ALLOW`; **3** `REVIEW`; **15** mock checkouts | A benchmark or reliable behavior across models/configurations |
-| [Historical saved-Groq replay](docs/LIVE_GROQ_CHECKOUT_EVALUATION.md) | Retained model outputs through the checkout path | **48** replayed; **2** invalid safely rejected; **60** scenarios; **0** unauthorized mock checkouts | Publicly reproducible model results—the checkpoint is private |
-
-In the 18-case run, no genuine selected hard-requirement violation was established as authorized. That is a bounded observation from one frozen corpus. It does not prove unsafe authorization is impossible. The run also had three `REVIEW` outcomes, a concrete reminder that a safe system can still be inconvenient when interpretation is uncertain.
-
-## Quickstart
-
-Requires Go 1.22 or newer. The module uses the Go standard library only.
+Requires Go 1.22+; the module has no third-party dependencies.
 
 ```sh
 git clone https://github.com/BHAVIKA44/buyrightagents.git
 cd buyrightagents
-
-go run ./cmd/buyrightagents help
-go run ./cmd/buyrightagents version
+make demo
 ```
 
-### Fully reproducible offline examples
+`make demo` runs these real checked-in fixtures through `verify`:
+
+| Scenario | User intent represented in the fixture | Evidence / cart fact | Actual deterministic result | Why it matters |
+| --- | --- | --- | --- | --- |
+| [ALLOW](examples/vegan-backpack.json) | vegan, 16-inch fit, total ≤ ₹5,000, arrival by 2026-10-30 | selected item is vegan and fits 16 inches; derived total is ₹4,750; promised date is 2026-10-29 | `ALLOW` | Evidence supports every hard requirement. |
+| [BLOCK](examples/non-vegan-backpack.json) | vegan | selected item has accepted `vegan: false` evidence | `BLOCK` | A known hard violation cannot be paid through merely because the cart is otherwise plausible. |
+| [REVIEW](examples/missing-vegan-evidence.json) | vegan | no product evidence establishes the claim | `REVIEW` | Missing proof is not treated as a pass. |
+
+The CLI emits a full JSON report with the canonical cart hash, evidence
+provenance, and per-requirement outcomes. The important excerpts are produced by
+the commands above:
+
+```text
+# vegan-backpack.json
+"decision": "ALLOW"       "outcome": "PASS"
+
+# non-vegan-backpack.json
+"decision": "BLOCK"       "outcome": "FAIL"
+
+# missing-vegan-evidence.json
+"decision": "REVIEW"      "outcome": "UNKNOWN"
+```
+
+The fixtures are synthetic and offline. They demonstrate the verifier's policy,
+not proof of a real catalogue claim. The regression test
+[`TestRunVerify`](cmd/buyrightagents/main_test.go) executes all three through the
+public CLI path.
+
+## The engineering choices
+
+| Failure mode | Design and implementation | Prototype guarantee | Deliberate limit |
+| --- | --- | --- | --- |
+| The model invents fields or authorizes itself. | [`internal/intent/interpreter.go`](internal/intent/interpreter.go) strict-decodes a constrained schema that has requirements, clarifications, and unsupported constraints—never a decision or cart. [`TestModelJSONRejectsMalformedUnknownDuplicateAndDecisionFields`](internal/intent/interpreter_test.go) covers unsafe output. | Invalid model output does not become an approval. | Schema validity is not semantic completeness. |
+| A hard requirement disappears or changes polarity. | Grounded source spans and targeted, position-aware coverage checks in [`internal/intent/coverage.go`](internal/intent/coverage.go); tests include [`TestCoverageGuardDetectsOmittedCategoryMaterialAndLaptopFit`](internal/intent/interpreter_test.go) and [`TestWrongPolarityCannotBypassCoverageThroughIncidentalText`](cmd/buyrightagents/purchase_check_test.go). | Defined, recognizable omissions become `REVIEW` rather than silent authorization. | This is not general natural-language understanding. |
+| `under ₹5,000` quietly becomes inclusive, or a date uses a number operator. | Typed values and attribute/operator contracts in [`internal/verification/verification.go`](internal/verification/verification.go); [`TestStrictNumericBoundaries`](internal/verification/verification_test.go) and [`TestBuiltInCartRequirementContracts`](internal/verification/verification_test.go). | Exact numeric comparisons; strict and inclusive bounds remain distinct; invalid combinations are errors. | Only implemented attributes/operators are understood. |
+| Evidence for one listing approves another. | Item evidence must agree with cart item, product, and variant; multi-item requirements need explicit bindings. See [`TestEvidenceScopePreventsCrossItemMatching`](internal/verification/verification_test.go) and [`TestPurchaseCheckMultiItemBindingPolicy`](cmd/buyrightagents/purchase_check_test.go). | Wrong-item, wrong-product, or wrong-variant evidence cannot satisfy an item requirement. | Evidence itself is synthetic unless the mock gate validates an attestation. |
+| A product claim overrides a changed price or delivery promise. | `total_price_paise` and `delivery_date` are derived only from the validated cart snapshot. [`TestSnapshotDerivedTotalAndDelivery`](internal/verification/verification_test.go) covers this boundary. | Product evidence cannot override cart-derived facts. | The supplied cart is not a merchant-authenticated live cart. |
+| An approval outlives or drifts from its cart. | Canonical cart hashing, context binding, in-process HMAC attestations, a gate-owned clock, and one-time approvals in [`internal/evidence/mock_provider.go`](internal/evidence/mock_provider.go) and [`internal/checkout/control.go`](internal/checkout/control.go). [`TestGateAuthorizesOneTimeBoundCheckout`](internal/checkout/control_test.go), [`TestGateRechecksEvidenceFreshnessAtCheckout`](internal/checkout/control_test.go), and [`TestGateRejectsTamperingWithoutConsumingApproval`](internal/checkout/control_test.go) exercise the path. | The mock gate rejects altered, stale, mismatched, or replayed approved contexts. | It is process-local and does not authenticate a seller or execute payment. |
+| One confirmed hard failure is hidden by another unknown. | The composed purchase policy gives independently established hard `FAIL` precedence over unrelated unknowns; [`TestPurchaseCheckHardFailureDecisionPrecedence`](cmd/buyrightagents/purchase_check_test.go) covers it. | A known applicable hard failure is `BLOCK`, not silently downgraded to `REVIEW`. | Contradictory or ambiguous intent without an independent failure remains `REVIEW`. |
+
+The verifier's rule is intentionally simple:
+
+```text
+any independently established hard FAIL         -> BLOCK
+no hard FAIL, any unresolved hard requirement  -> REVIEW
+all hard requirements PASS, no unresolved intent -> ALLOW
+preferences alone do not cause BLOCK
+```
+
+## Evidence, not just claims
+
+The project keeps deterministic, adversarial, live-model, and historical results
+separate because they answer different questions.
+
+| Evidence set | Reproduce | Reported result | What it can show | What it cannot show |
+| --- | --- | --- | --- | --- |
+| Deterministic verifier corpus | `make eval` | **67/67** decision matches; **88/88** requirement-outcome matches | Agreement with independently authored synthetic verifier labels | Real seller truth, live-cart integrity, or production safety |
+| Adversarial mock-path corpus | `make adversarial-eval` | **109/109** scenarios; **0** unexpected `ALLOW`; **0** unauthorized mock checkouts | Resistance to the fixed malformed/tampered/cross-item/stale/replay fixtures | Zero vulnerabilities outside this corpus or live-model robustness |
+| Controlled live model run | [report](docs/LIVE_GROQ_E2E_EVALUATION.md) | **18/18** synthetic cases; **36** calls; **15** `ALLOW`; **3** `REVIEW`; **15** mock checkouts | One recorded buyer + interpreter run against a frozen synthetic corpus | A benchmark or stable model behavior |
+| Saved-Groq checkout replay | [report](docs/LIVE_GROQ_CHECKOUT_EVALUATION.md) | **48** saved outputs replayed; **2** invalid safely rejected; **60** scenarios; **0** unauthorized mock checkouts | Current handling of retained model outputs through the mock checkout path | Public reproducibility—the checkpoint is private—or live seller truth |
+
+The adversarial suite includes wrong-product/variant evidence, missing evidence,
+strict price boundaries, cart mutation, malformed model output, untrusted
+evidence, tampered approvals, and replay attempts. It intentionally reports
+unfavourable outcomes too: recognized model omissions become `REVIEW`; one
+frozen live-E2E oracle classified a leather backpack as unacceptable even though
+it matched the written constraints; and safe `REVIEW` decisions can be
+unnecessary refusals of compliant synthetic carts. Details and command mapping
+are in [docs/PROOF.md](docs/PROOF.md).
+
+## Developer workflow
 
 ```sh
-# Synthetic cart with verified vegan, laptop-fit, price, and delivery evidence.
-go run ./cmd/buyrightagents verify examples/vegan-backpack.json
-# => ALLOW
-
-# Same type of cart with accepted evidence that it is not vegan.
-go run ./cmd/buyrightagents verify examples/non-vegan-backpack.json
-# => BLOCK
+go run ./cmd/buyrightagents help
+go run ./cmd/buyrightagents version
 
 go test -count=1 ./...
 go test -race -count=1 ./...
@@ -163,11 +184,14 @@ make eval
 make adversarial-eval
 ```
 
-`make adversarial-eval` regenerates its checked-in synthetic results/report. It makes no live model request.
+`make adversarial-eval` regenerates its checked-in synthetic report and JSON
+result. It does not call an LLM. The CI workflow runs the same offline quality
+gates on pushes and pull requests; see [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ### Optional remote interpretation
 
-Only use this if you choose to provide your own OpenAI-compatible API key. Never commit or print it.
+Remote interpretation is explicitly opt-in and never authorizes checkout by
+itself. Provide an OpenAI-compatible endpoint and your own key locally:
 
 ```sh
 export BUYRIGHTAGENTS_LLM_API_KEY="..."
@@ -179,14 +203,36 @@ go run ./cmd/buyrightagents interpret \
   "Find a vegan bag under ₹5,000 and ideally red."
 ```
 
-`interpret` returns an untrusted typed intent, not a purchase decision. `check`, `mock-checkout`, and `eval-intent` also use the configured remote model; the latter may incur API charges. Historical saved-Groq replay needs a private ignored checkpoint and cannot be reproduced from a fresh clone; see [its documentation](docs/LIVE_GROQ_CHECKOUT_EVALUATION.md).
+`interpret` returns validated *intent data*, not a decision. `check`,
+`mock-checkout`, and `eval-intent` also make remote requests when configured;
+`eval-intent` may incur charges. Do not log, commit, or share keys. The core
+offline walkthrough does not need a key or network.
 
-## Limits and non-claims
+## Prototype boundaries
 
-- Natural-language interpretation remains incomplete. Grounding and coverage checks catch defined classes of error, not every omitted or misunderstood constraint.
-- `REVIEW` is intentional fail-closed behavior, but can be an incorrect refusal of a compliant synthetic cart.
-- Products, carts, evidence, and the provider HMAC are synthetic. There is no evidence retrieval, seller authentication, or live merchant-cart verification.
-- Checkout approval is in memory, process-local, and mock-only. No payment authorization or merchant integration exists.
-- Live evaluation is limited to one fixed 18-case run on one model/configuration. Historical model checkpoints are private and are not a public benchmark.
+- **No merchant or payment integration.** There is no real checkout, payment
+  authorization, seller authentication, or live-cart retrieval.
+- **Synthetic evidence only.** An HMAC proves that this prototype's mock provider
+  attested a particular synthetic record; it does not prove external seller truth.
+- **Interpretation is incomplete by design.** Grounding and coverage checks catch
+  defined error classes, not every omission or nuanced linguistic meaning.
+- **`REVIEW` is a safety outcome, not a success.** It withholds mock authorization
+  when hard intent or evidence is unresolved, and can inconvenience a compliant
+  purchase.
+- **The gate is a local demonstration.** Approvals are in-memory, process-local,
+  cart-bound, and one-time; they are not deployable payment credentials.
 
-For implementation detail, start with [Architecture](docs/ARCHITECTURE.md), [Engineering decisions](docs/DECISIONS.md), [the problem statement](docs/PROBLEM.md), and the linked evaluation reports.
+Read [the problem statement](docs/PROBLEM.md), [Architecture](docs/ARCHITECTURE.md),
+[engineering decisions](docs/DECISIONS.md), and the [claim-to-proof guide](docs/PROOF.md)
+for the five-minute review route.
+
+## Where it could go next
+
+1. **Authenticated merchant evidence adapters** with explicit provenance and
+   freshness semantics, rather than synthetic claims.
+2. **A persistent authorization service** that revalidates a merchant's live cart
+   at checkout while preserving the same binding and audit invariants.
+3. **Broader, independently reviewed language and evidence evaluation**, with
+   measured false-approval and false-refusal rates across representative tasks.
+
+Those are future product steps—not capabilities claimed by this repository.

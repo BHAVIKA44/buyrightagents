@@ -30,16 +30,43 @@ func TestRunHelpAndVersion(t *testing.T) {
 }
 
 func TestRunVerify(t *testing.T) {
-	inputPath := filepath.Join("..", "..", "examples", "vegan-backpack.json")
-	var stdout, stderr bytes.Buffer
-	if code := run([]string{"verify", inputPath}, &stdout, &stderr); code != 0 {
-		t.Fatalf("run verify code = %d, stderr %q", code, stderr.String())
+	tests := []struct {
+		name string
+		file string
+		want []string
+	}{
+		{
+			name: "allow with accepted evidence",
+			file: "vegan-backpack.json",
+			want: []string{`"decision": "ALLOW"`, `"cart_snapshot_sha256":`, `"value": 475000`, `"source_id": "fictional-catalogue:backpack-001"`, `"source_id": "local-cart-snapshot"`},
+		},
+		{
+			name: "block with established hard violation",
+			file: "non-vegan-backpack.json",
+			want: []string{`"decision": "BLOCK"`, `"outcome": "FAIL"`},
+		},
+		{
+			name: "review with missing hard evidence",
+			file: "missing-vegan-evidence.json",
+			want: []string{`"decision": "REVIEW"`, `"outcome": "UNKNOWN"`},
+		},
 	}
-	if !strings.Contains(stdout.String(), `"decision": "ALLOW"`) || !strings.Contains(stdout.String(), `"cart_snapshot_sha256":`) || !strings.Contains(stdout.String(), `"value": 475000`) || !strings.Contains(stdout.String(), `"source_id": "fictional-catalogue:backpack-001"`) || !strings.Contains(stdout.String(), `"source_id": "local-cart-snapshot"`) {
-		t.Fatalf("verify output missing decision or evidence provenance: %s", stdout.String())
-	}
-	if stderr.Len() != 0 {
-		t.Fatalf("unexpected stderr: %s", stderr.String())
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inputPath := filepath.Join("..", "..", "examples", tt.file)
+			var stdout, stderr bytes.Buffer
+			if code := run([]string{"verify", inputPath}, &stdout, &stderr); code != 0 {
+				t.Fatalf("run verify code = %d, stderr %q", code, stderr.String())
+			}
+			for _, want := range tt.want {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("verify output missing %q: %s", want, stdout.String())
+				}
+			}
+			if stderr.Len() != 0 {
+				t.Fatalf("unexpected stderr: %s", stderr.String())
+			}
+		})
 	}
 }
 
