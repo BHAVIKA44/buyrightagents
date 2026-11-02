@@ -70,6 +70,34 @@ func TestRunVerify(t *testing.T) {
 	}
 }
 
+func TestRunDemoUsesActualFixtureResults(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if code := run([]string{"demo"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("run demo code = %d, stderr %q", code, stderr.String())
+	}
+	for _, want := range []string{
+		"SCENARIO 1: ALLOW",
+		"Hard requirements: vegan; laptop fit ≥ 16 inches; total price ≤ ₹5,000; delivery by 2026-10-30",
+		"Cart total: ₹4,750",
+		"Decision: ALLOW",
+		"SCENARIO 2: BLOCK",
+		"Decision: BLOCK",
+		"confirmed hard-constraint violation: vegan",
+		"SCENARIO 3: REVIEW",
+		"Decision: REVIEW",
+		"missing evidence for hard requirement: vegan",
+		"3 scenarios executed",
+		"1 ALLOW | 1 BLOCK | 1 REVIEW",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("demo output missing %q:\n%s", want, stdout.String())
+		}
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("unexpected stderr: %s", stderr.String())
+	}
+}
+
 func TestRunVerifyErrors(t *testing.T) {
 	malformedPath := filepath.Join(t.TempDir(), "malformed.json")
 	if err := os.WriteFile(malformedPath, []byte(`{"requirements": [`), 0o600); err != nil {
