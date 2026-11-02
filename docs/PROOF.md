@@ -16,7 +16,9 @@ cd buyrightagents
 make demo
 ```
 
-The command runs the public `verify` CLI three times, entirely offline:
+The command runs the public `demo` CLI entirely offline. It evaluates the same
+three fixtures as `verify`, derives the displayed total/outcome/reason from each
+real report, and fails if a fixture no longer produces its expected decision:
 
 | Fixture | Expected decision | What it proves |
 | --- | --- | --- |
@@ -24,10 +26,16 @@ The command runs the public `verify` CLI three times, entirely offline:
 | [`examples/non-vegan-backpack.json`](../examples/non-vegan-backpack.json) | `BLOCK` | A verified negative vegan claim establishes a hard failure. |
 | [`examples/missing-vegan-evidence.json`](../examples/missing-vegan-evidence.json) | `REVIEW` | Missing evidence for a hard requirement cannot fall through to approval. |
 
-Each JSON report contains the cart snapshot hash, the evidence used, and a
-`PASS`, `FAIL`, or `UNKNOWN` assessment for each requirement. The public CLI
-test [`TestRunVerify`](../cmd/buyrightagents/main_test.go) covers the same three
-fixtures.
+For full JSON reports, run `go run ./cmd/buyrightagents verify <fixture.json>`.
+Those reports contain the cart snapshot hash, the evidence used, and a `PASS`,
+`FAIL`, or `UNKNOWN` assessment for each requirement. The public CLI tests
+[`TestRunVerify`](../cmd/buyrightagents/main_test.go) and
+[`TestRunDemoUsesActualFixtureResults`](../cmd/buyrightagents/main_test.go)
+cover the fixtures and formatted experience.
+
+The 60-second route is **verification only**: it does not call an LLM, create
+mock HMAC evidence attestations, or execute a checkout. The gate paths are
+tested separately below.
 
 ## Five-minute route: verify the engineering boundaries
 
